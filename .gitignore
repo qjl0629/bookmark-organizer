@@ -1,0 +1,26 @@
+# Personal data: never commit real bookmarks, exports, or backups (repo is public)
+Bookmarks
+Bookmarks.bak
+Bookmarks.*
+*.bookmarks.json
+bookmarks*.html
+bookmarks*.json
+!tests/fixtures/*.json
+backups/
+output/
+plans/
+
+# Secrets
+.env
+*.pem
+id_*
+*.key
+
+# Python / Node / OS
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+.DS_Store
+.vscode/

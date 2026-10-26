@@ -44,3 +44,23 @@ export function pathDepth(url) {
     return 0;
   }
 }
+
+// URL path parts that name a kind of page rather than a subject.
+export const GENERIC_SEGMENTS = new Set([
+  "sites", "site", "teams", "team", "personal", "pages", "page", "sitepages", "shared documents", "documents",
+  "lists", "forms", "wiki", "browse", "view", "docs", "doc", "d", "c", "p", "s", "r", "g", "u", "en", "en-us",
+  "app", "apps", "home", "index", "dashboard", "portal", "search", "login", "signin", "kb", "sp", "files",
+]);
+
+export const safeDecode = (text) => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+};
+
+export const looksLikeId = (segment) => /^\d+$/.test(segment) || /^[0-9a-f-]{12,}$/i.test(segment);
+
+// A title that is just a web address (or a shortened one ending in "...") has no words of its own.
+export const looksLikeAddress = (title) => /^(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}([/?#:]|\.\.\.|…|$)/i.test(title.trim());

@@ -1,7 +1,8 @@
 // Learns what each folder is about from the bookmarks already in it, so unfamiliar and
 // internal sites can be judged too. Each bookmark becomes a weighted bag of tokens (host,
 // first path segments, title words). Similarity is TF-IDF cosine, computed locally.
-import { hostOf } from "./url.js";
+import { buildSemantic } from "./semantic.js";
+import { GENERIC_SEGMENTS, hostOf, looksLikeAddress, looksLikeId, safeDecode } from "./url.js";
 
 const STOP = new Set([
   "the", "and", "for", "with", "from", "this", "that", "your", "you", "are", "how", "what", "new", "all",
@@ -15,6 +16,12 @@ const MIN_SCORE = 0.1;
 // Flag a bookmark when another folder resembles it clearly more than its own folder does.
 const MISFILED = { minScore: 0.25, minGap: 0.2 };
 const PLACE = { minScore: 0.25, margin: 0.05 };
+// Meaning-based matching (see semantic.js) works on a different scale than word overlap.
+export const SEMANTIC = {
+  consistentGap: 0.1, // a member is "consistent" when no other folder beats its own by more than this
+  misfiled: { minScore: 0.25, minGap: 0.17 },
+  place: { minScore: 0.3, margin: 0.05 },
+};
 // Added to every vector's norm, as if each bookmark also had one unmatched token. Without it
 // two bookmarks sharing a single common word would look identical.
 const SMOOTHING = 4;
@@ -26,24 +33,7 @@ const MIN_EVIDENCE = 2;
 const PLATFORM_HOST_FOLDERS = 2;
 const GENERIC_TOKEN_FOLDERS = 3;
 
-// URL path parts that name a kind of page rather than a subject.
-const GENERIC_SEGMENTS = new Set([
-  "sites", "site", "teams", "team", "personal", "pages", "page", "sitepages", "shared documents", "documents",
-  "lists", "forms", "wiki", "browse", "view", "docs", "doc", "d", "c", "p", "s", "r", "g", "u", "en", "en-us",
-  "app", "apps", "home", "index", "dashboard", "portal", "search", "login", "signin", "kb", "sp", "files",
-]);
-
 const stem = (token) => (token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token);
-const safeDecode = (text) => {
-  try {
-    return decodeURIComponent(text);
-  } catch {
-    return text;
-  }
-};
-const looksLikeId = (segment) => /^\d+$/.test(segment) || /^[0-9a-f-]{12,}$/i.test(segment);
-// A title that is just a web address (or a shortened one ending in "...") has no words of its own.
-const looksLikeAddress = (title) => /^(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}([/?#:]|\.\.\.|…|$)/i.test(title.trim());
 
 function rawTokens(bookmark) {
   const tokens = new Map();
@@ -130,12 +120,34 @@ export function buildModel(items) {
   };
 }
 
+// The largest gap this folder's members normally show. The biggest few are left out first,
+// because they are exactly the misfiles we are looking for.
+function robustLimit(gaps) {
+  if (gaps.length < 4) return Infinity;
+  const sorted = [...gaps].sort((a, b) => a - b);
+  const normal = sorted.slice(0, sorted.length - Math.max(1, Math.round(sorted.length * 0.2)));
+  return normal[normal.length - 1] + 0.04;
+}
+
 const shorten = (text, max = 38) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 // folders: leaf-capable folder list from flatten(); bookmarks: every bookmark in the tree.
-export function learnFromFolders(folders, bookmarks) {
+// embedder (optional): the bundled meaning model. Without it only word overlap is used.
+export function learnFromFolders(folders, bookmarks, { embedder = null, thresholds = SEMANTIC } = {}) {
   const folderById = new Map(folders.map((f) => [f.id, f]));
   const model = buildModel(bookmarks);
+  const semantic = embedder ? buildSemantic(folders, bookmarks, embedder) : null;
+  const semCache = new Map();
+  const semRank = (i) => {
+    if (!semantic) return [];
+    if (!semCache.has(i)) {
+      semCache.set(
+        i,
+        semantic.score(i).map((r) => ({ ...r, folder: folderById.get(r.folderId), neighbors: r.neighbors.map((j) => bookmarks[j]) })),
+      );
+    }
+    return semCache.get(i);
+  };
   const members = new Map();
   bookmarks.forEach((b, i) => {
     if (!folderById.has(b.parentId)) return;
@@ -162,6 +174,14 @@ export function learnFromFolders(folders, bookmarks) {
     return out.sort((a, b) => b.score - a.score);
   };
 
+  // How much better the best OTHER folder fits bookmark i than its own folder (null if unknown).
+  const semanticGap = (i, folderId) => {
+    const ranking = semRank(i);
+    const own = ranking.find((r) => r.folderId === folderId);
+    const other = ranking.find((r) => r.folderId !== folderId);
+    return own && other ? other.sem - own.sem : null;
+  };
+
   // Leave-one-out: can the model put each bookmark back into the folder it is in?
   // A folder it can't tell apart from the rest is organized by something it can't see.
   const cache = new Map();
@@ -169,18 +189,47 @@ export function learnFromFolders(folders, bookmarks) {
   for (const [folderId, indexes] of members) {
     if (indexes.length < MIN_JUDGED) continue;
     let correct = 0;
+    let consistent = 0;
+    const gaps = [];
     for (const i of indexes) {
       const ranking = rank(i);
       cache.set(i, ranking);
       if (ranking[0]?.folder.id === folderId && ranking[0].score >= MIN_SCORE) correct++;
+      const gap = semanticGap(i, folderId);
+      if (gap !== null) {
+        gaps.push(gap);
+        if (gap < thresholds.consistentGap) consistent++;
+      }
     }
-    stats.set(folderId, { folder: folderById.get(folderId), size: indexes.length, coherence: correct / indexes.length });
+    stats.set(folderId, {
+      folder: folderById.get(folderId),
+      size: indexes.length,
+      coherence: correct / indexes.length,
+      semCoherence: gaps.length ? consistent / gaps.length : 0,
+      // Gaps this folder's own members show are normal for it; only a clearly larger one is a misfile.
+      gapLimit: Math.max(thresholds.misfiled.minGap, robustLimit(gaps)),
+    });
   }
 
   const reason = (best, own) => {
     const seen = best.neighbors.map((b) => `"${shorten(b.title || b.url)}"`).join(", ");
     const ownFolder = folderById.get(bookmarks[own].parentId).path.join("/");
     return `Looks more like "${best.folder.path.join("/")}" (similar to ${seen}) than "${ownFolder}"`;
+  };
+
+  // A title can fit a folder by its name ("Recipes") or by being about the same thing as what's in it.
+  const byName = (best) => best.name >= 0.35 && best.name >= best.nearest;
+  const semanticWhy = (best, ownFolder) => ({
+    type: byName(best) ? "topicName" : "topic",
+    titles: best.neighbors.map((n) => n.title || hostOf(n.url)),
+    ownFolder,
+    folder: best.folder.title,
+  });
+  const semanticReason = (best, ownFolder) => {
+    const target = `"${best.folder.path.join("/")}"`;
+    if (byName(best)) return `Its subject matches the folder name ${target}${ownFolder ? ` rather than "${ownFolder}"` : ""}`;
+    const seen = best.neighbors.map((b) => `"${shorten(b.title || b.url)}"`).join(", ");
+    return `About the same thing as ${seen} in ${target}${ownFolder ? ` rather than "${ownFolder}"` : ""}`;
   };
 
   return {
@@ -195,33 +244,54 @@ export function learnFromFolders(folders, bookmarks) {
     // Bookmarks that look out of place in a folder the model understands well.
     misplaced(dismissed = () => false) {
       const results = [];
+      const entry = (b, to, confidence, reasonText, why) => ({
+        id: b.id,
+        title: b.title,
+        url: b.url,
+        fromParentId: b.parentId,
+        fromPath: b.path,
+        to: { folderId: to.id, label: to.path.join("/"), path: to.path, newFolder: null },
+        confidence,
+        reason: reasonText,
+        why,
+      });
       for (const [folderId, stat] of stats) {
-        if (stat.coherence < MIN_COHERENCE) continue;
+        const lexicalOk = stat.coherence >= MIN_COHERENCE;
+        const semanticOk = stat.semCoherence >= MIN_COHERENCE;
+        if (!lexicalOk && !semanticOk) continue;
         for (const i of members.get(folderId)) {
           const b = bookmarks[i];
           if (dismissed(b)) continue;
-          const ranking = cache.get(i);
-          const own = ranking.find((r) => r.folder.id === folderId)?.score ?? 0;
-          const best = ranking.find((r) => r.folder.id !== folderId);
-          if (!best || best.score < MISFILED.minScore || best.evidence < MIN_EVIDENCE) continue;
-          const gap = best.score - own;
-          if (gap < MISFILED.minGap) continue;
-          results.push({
-            id: b.id,
-            title: b.title,
-            url: b.url,
-            fromParentId: b.parentId,
-            fromPath: b.path,
-            to: { folderId: best.folder.id, label: best.folder.path.join("/"), path: best.folder.path, newFolder: null },
-            confidence: best.score >= 0.5 && gap >= 0.4 ? "high" : best.score >= 0.35 && gap >= 0.25 ? "medium" : "low",
-            reason: reason(best, i),
-            why: {
-              type: "similarElsewhere",
-              titles: best.neighbors.map((n) => n.title || hostOf(n.url)),
-              ownFolder: folderById.get(b.parentId).title,
-              folder: best.folder.title,
-            },
-          });
+
+          if (lexicalOk) {
+            const ranking = cache.get(i);
+            const own = ranking.find((r) => r.folder.id === folderId)?.score ?? 0;
+            const best = ranking.find((r) => r.folder.id !== folderId);
+            if (best && best.score >= MISFILED.minScore && best.evidence >= MIN_EVIDENCE && best.score - own >= MISFILED.minGap) {
+              const gap = best.score - own;
+              results.push(
+                entry(b, best.folder, best.score >= 0.5 && gap >= 0.4 ? "high" : best.score >= 0.35 && gap >= 0.25 ? "medium" : "low", reason(best, i), {
+                  type: "similarElsewhere",
+                  titles: best.neighbors.map((n) => n.title || hostOf(n.url)),
+                  ownFolder: folderById.get(b.parentId).title,
+                  folder: best.folder.title,
+                }),
+              );
+              continue;
+            }
+          }
+
+          if (semanticOk) {
+            const ranking = semRank(i);
+            const own = ranking.find((r) => r.folderId === folderId)?.sem ?? 0;
+            const best = ranking.find((r) => r.folderId !== folderId);
+            if (!best || best.sem < thresholds.misfiled.minScore || best.sem - own < stat.gapLimit) continue;
+            const gap = best.sem - own;
+            const ownName = folderById.get(b.parentId).title;
+            results.push(
+              entry(b, best.folder, best.sem >= 0.55 && gap >= 0.3 ? "high" : best.sem >= 0.45 && gap >= 0.2 ? "medium" : "low", semanticReason(best, ownName), semanticWhy(best, ownName)),
+            );
+          }
         }
       }
       return results;
@@ -232,23 +302,34 @@ export function learnFromFolders(folders, bookmarks) {
       const i = bookmarks.indexOf(bookmark);
       if (i < 0) return null;
       const [top, second] = rank(i);
-      if (!top || top.score < PLACE.minScore || top.evidence < MIN_EVIDENCE || (second && top.score - second.score < PLACE.margin)) return null;
-      const seen = top.neighbors.map((b) => `"${shorten(b.title || b.url)}"`).join(", ");
+      if (top && top.score >= PLACE.minScore && top.evidence >= MIN_EVIDENCE && !(second && top.score - second.score < PLACE.margin)) {
+        const seen = top.neighbors.map((b) => `"${shorten(b.title || b.url)}"`).join(", ");
+        return {
+          folder: top.folder,
+          confidence: top.score >= 0.45 ? "medium" : "low",
+          reason: `Similar to ${seen} in "${top.folder.path.join("/")}"`,
+          why: { type: "similar", titles: top.neighbors.map((n) => n.title || hostOf(n.url)), folder: top.folder.title },
+        };
+      }
+
+      const [meaning, runnerUp] = semRank(i);
+      if (!meaning || meaning.sem < thresholds.place.minScore || (runnerUp && meaning.sem - runnerUp.sem < thresholds.place.margin)) return null;
       return {
-        folder: top.folder,
-        confidence: top.score >= 0.45 ? "medium" : "low",
-        reason: `Similar to ${seen} in "${top.folder.path.join("/")}"`,
-        why: { type: "similar", titles: top.neighbors.map((n) => n.title || hostOf(n.url)), folder: top.folder.title },
+        folder: meaning.folder,
+        confidence: meaning.sem >= 0.55 ? "medium" : "low",
+        reason: semanticReason(meaning, null),
+        why: semanticWhy(meaning, null),
       };
     },
 
     // What the model could and couldn't judge, so a short suggestion list can be explained.
     diagnostics() {
       const all = [...stats.values()];
-      const judged = all.filter((s) => s.coherence >= MIN_COHERENCE);
-      const mixed = all.filter((s) => s.coherence < MIN_COHERENCE).sort((a, b) => b.size - a.size);
+      const best = (s) => Math.max(s.coherence, s.semCoherence);
+      const judged = all.filter((s) => best(s) >= MIN_COHERENCE);
+      const mixed = all.filter((s) => best(s) < MIN_COHERENCE).sort((a, b) => b.size - a.size);
       const bookmarksInJudged = judged.reduce((sum, s) => sum + s.size, 0);
-      const correct = all.reduce((sum, s) => sum + s.coherence * s.size, 0);
+      const correct = all.reduce((sum, s) => sum + best(s) * s.size, 0);
       const total = all.reduce((sum, s) => sum + s.size, 0);
       return {
         folders: folders.length,
@@ -256,7 +337,7 @@ export function learnFromFolders(folders, bookmarks) {
         foldersJudged: judged.length,
         bookmarksInJudged,
         accuracy: total ? correct / total : null,
-        mixed: mixed.map((s) => ({ path: s.folder.path.join("/"), size: s.size, coherence: s.coherence })),
+        mixed: mixed.map((s) => ({ path: s.folder.path.join("/"), size: s.size, coherence: best(s) })),
       };
     },
   };

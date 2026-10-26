@@ -5,10 +5,11 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 - **You always see where a bookmark is going.** Every suggestion reads as a route: the site, the folder it is in now, an arrow, and the folder I'd put it in, plus one plain sentence on why. No scores or jargon.
 - **Learns from you.** A loose bookmark follows the folder that already holds most bookmarks from the same site, or the folder that mostly holds that kind of site (a folder called "Buy" full of shopping sites counts as your shopping folder). Built-in categories are only a fallback.
 - **Your shortcuts stay put.** Things on the bookmarks bar that you click to *use* (Gmail, ChatGPT, bookmarklets, icon-only bookmarks, short-named home pages) are never moved. You can mark any item "Keep on bar" or "Organize it anyway", and it is remembered.
-- **Catches misfiled bookmarks.** Learns what each of your folders is about from what is already in it, then flags a bookmark that resembles a different folder much more than its own, and says which bookmarks it resembles. Works for work and internal sites too. Suggestions are never pre-selected, and "Keep here" is remembered.
+- **Understands what a page is about.** A small language model ships inside the extension (about 8 MB, runs on your computer). A bookmark about pasta belongs with your recipes even if no word is shared, and a mortgage article in your Health folder gets flagged. It can be switched off in "How I decide".
+- **Catches misfiled bookmarks.** Learns what each of your folders is about from what is already in it, then flags a bookmark that resembles a different folder much more than its own, and says which bookmarks it resembles. Works for work and internal sites too. "Keep here" is remembered.
 - **You approve everything, in one click if you trust it.** The top button, **Tidy up everything**, selects every suggestion and asks for a final yes. Each section also has **Select all**, **Only the likely ones** and **Clear**, and a floating bar keeps the count and the **Tidy up** button in reach. Nothing changes until you confirm.
 - **One-click undo.** Restores the original positions of the last run, including removed duplicates.
-- **Private by design.** No account, no API key, no network requests. The only permissions are `bookmarks` and `storage`.
+- **Private by design.** No account, no API key, no network requests. The meaning model is a file inside the extension and is read from there, never downloaded. The only permissions are `bookmarks` and `storage`.
 - **Safe by default.** Bookmarks you already filed are only moved if you tick a suggestion. Duplicates are only removed if you tick them.
 
 > Status: v0.1, not yet on the Chrome Web Store. Install it from source below.
@@ -41,9 +42,18 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 
 Loose bookmarks that match no rule above are also placed by content similarity before a new folder is suggested.
 
-Every proposal shows its confidence and the reason.
+**Smart matching (the bundled model).** Word overlap can't tell that "Roth conversion ladder" belongs with "Mortgage rates". The extension therefore includes [`minishlab/potion-base-8M`](https://huggingface.co/minishlab/potion-base-8M) (MIT licence), a static word-embedding model: every word has a fixed vector, and a bookmark's meaning is the average of its words. It needs no GPU, loads in about 0.1 s, and takes about 1.4 s to plan 3,300 bookmarks in 120 folders. Each folder is described by the average meaning of its bookmarks, its two closest bookmarks, and its name. A bookmark is flagged only when another folder fits clearly better than its own (a gap that the folder's own members never reach). A website that appears in several folders is left out of the text, so a shared SharePoint host never decides anything. `tools/build_model.py` rebuilds the files in `extension/model/` from the original.
 
-**Limits.** It judges by words and addresses, not by what a page means, so it can't know that "Copilot Studio" is part of the Power Platform if no bookmark in that folder says so, and folders with fewer than 4 bookmarks can't be judged. When unsure it stays quiet, so it misses some real mix-ups on purpose, and nothing in "Might be in the wrong folder" is pre-selected. A wrong suggestion costs more trust than a missed one. Understanding meaning would need a language model, which is not part of this local-only version.
+Measured on two invented libraries (tests run on every change). Word matching alone found 0 of 22 planted misfiles; with the model:
+
+| Library | Misfiled found (right folder) | Wrongly flagged | Loose bookmarks placed |
+|---|---|---|---|
+| A (thresholds tuned on it) | 11 of 14 | 1 | 11 of 12 correct, 0 wrong |
+| B (written afterwards, not tuned) | 7 of 8 | 0 | 6 of 6 correct |
+
+These are my own test libraries, not a promise about yours.
+
+**Limits.** The model knows everyday topics (food, travel, money, health, common programming terms) but has never heard of newer or very specific products, so it can't know that "Copilot Studio" belongs with Power Platform. In library A it reads "Copilot Studio" as GitHub Copilot and flags it; that is the one wrong flag above, and the test suite keeps it as a known case. Folders with fewer than 4 bookmarks can't be judged. Knowing such relationships needs a large language model, which would mean sending bookmarks to a server, and this project doesn't do that.
 
 ## Try it without touching your bookmarks
 
@@ -63,7 +73,8 @@ node --test extension/tests/*.test.js    # Node 22+
 ```
 
 - `extension/src/planner.js`: classification and misfiled detection, pure functions
-- `extension/src/learn.js`: learns what each folder is about (TF-IDF similarity, leave-one-out check)
+- `extension/src/learn.js`: learns what each folder is about (TF-IDF similarity, leave-one-out check, and the meaning-based path)
+- `extension/src/semantic.js`, `embed.js`, `model-loader.js`: meaning scores, the small embedder (WordPiece + averaged vectors), and the same-origin model loader
 - `extension/src/quickaccess.js`: which bookmarks-bar items count as shortcuts
 - `extension/src/url.js`: URL helpers
 - `extension/src/present.js`: turns reasons into plain sentences and prepares what the interface shows (tested, so the wording stays human)

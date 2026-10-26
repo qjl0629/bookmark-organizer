@@ -15,6 +15,10 @@ test("each kind of reason reads as a plain sentence", () => {
   assert.equal(describeWhy({ type: "kindFolder", category: "Shopping", folder: "Buy" }), "Your “Buy” folder is mostly shopping sites, like this one.");
   assert.equal(describeWhy({ type: "similar", titles: ["Atlas plan", "Atlas roadmap"], folder: "Project Atlas" }), "Looks a lot like your “Atlas plan” and “Atlas roadmap” in “Project Atlas”.");
   assert.equal(describeWhy({ type: "similar", titles: [], folder: "Project Atlas" }), "Looks similar to what's in “Project Atlas”.");
+  assert.equal(describeWhy({ type: "topic", titles: ["Vegan chili", "Pad thai"], folder: "Recipes", ownFolder: "Travel" }), "About the same thing as your “Vegan chili” and “Pad thai” in “Recipes”. It doesn't match the rest of “Travel”.");
+  assert.equal(describeWhy({ type: "topic", titles: [], folder: "Recipes" }), "About the same subject as what's in “Recipes”.");
+  assert.equal(describeWhy({ type: "topicName", folder: "Travel", ownFolder: "Finance" }), "Its subject fits the folder name “Travel”, not “Finance”.");
+  assert.equal(describeWhy({ type: "topicName", folder: "Travel" }), "Its subject fits the folder name “Travel”.");
   assert.equal(describeWhy({ type: "newFolder", category: "Travel" }), "Looks like travel sites. I'd start a new “Travel” folder for these.");
   assert.match(describeWhy({ type: "otherKind", host: "netflix.com", category: "Video & Entertainment", ownKind: "Shopping", ownFolder: "Buy", folder: "Watch" }), /netflix\.com looks like a video or entertainment site, but most of “Buy” is shopping sites\. “Watch” is a better home\./);
   assert.match(describeWhy({ type: "duplicate", keepFolder: "Dev" }), /earlier copy in “Dev”/);

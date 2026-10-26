@@ -186,7 +186,7 @@ export function findMisplaced(folders, bookmarks, dismissed = new Set()) {
 
 export function buildPlan(
   tree,
-  { minNewFolderSize = 2, pinned = new Set(), organizeAnyway = new Set(), dismissed = new Set() } = {},
+  { minNewFolderSize = 2, pinned = new Set(), organizeAnyway = new Set(), dismissed = new Set(), embedder = null, thresholds } = {},
 ) {
   const { roots, folders, bookmarks, barRootId } = flatten(tree);
   const rootTitle = new Map(roots.map((root) => [root.id, root.title]));
@@ -211,7 +211,7 @@ export function buildPlan(
   }
 
   const toExisting = (folder) => ({ folderId: folder.id, label: folder.path.join("/"), path: folder.path, newFolder: null });
-  const learned = learnFromFolders(folders, bookmarks);
+  const learned = learnFromFolders(folders, bookmarks, { embedder, ...(thresholds && { thresholds }) });
   // Largest folder first, so a loose shopping site goes to the main shopping folder.
   const categoryFolders = folderProfiles(folders, bookmarks).targets.sort((a, b) => b.list.length - a.list.length);
   const decisions = [];
@@ -234,6 +234,15 @@ export function buildPlan(
     const found =
       fromCounts(byHost.get(host), host, folderById) ??
       fromCounts(byBase.get(baseDomain(host)), baseDomain(host), folderById, { minCount: 3, minShare: 0.8, cap: "medium" });
+    if (found && embedder && (byHost.get(host)?.size ?? 0) >= 2) {
+      // A website that is spread over several folders (SharePoint, a ticket portal) says nothing
+      // about the subject, so what the page is about decides when the model can tell.
+      const byMeaning = learned.suggestFolder(bookmark);
+      if (byMeaning) {
+        decisions.push({ bookmark, to: toExisting(byMeaning.folder), confidence: byMeaning.confidence, reason: byMeaning.reason, why: byMeaning.why });
+        continue;
+      }
+    }
     if (found) {
       decisions.push({ bookmark, to: toExisting(found.folder), confidence: found.confidence, reason: found.reason, why: found.why });
       continue;

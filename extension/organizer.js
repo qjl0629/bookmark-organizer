@@ -1,4 +1,5 @@
 import { applyPlan, undoRun } from "./src/apply.js";
+import { loadEmbedder } from "./src/model-loader.js";
 import { buildPlan, dismissKey, hostOf, normalizeUrl } from "./src/planner.js";
 import { CONFIDENCE, avatarHue, avatarLetter, describeWhy, folderChip, shortcutWhy } from "./src/present.js";
 
@@ -17,6 +18,9 @@ const state = {
   expanded: { moves: false, review: false, dups: false },
   justApplied: false,
   busy: false,
+  // "loading" until the bundled model is read, then "ready"; "failed" means word matching only.
+  model: { status: "loading", embedder: null, seconds: 0 },
+  smartMatching: true,
 };
 const PREVIEW_ROWS = 6;
 
@@ -90,6 +94,7 @@ async function changeSettings(mutate) {
   await chrome.storage.local.set(Object.fromEntries(SETTING_KEYS.map((key) => [key, [...settings[key]]])));
   const y = window.scrollY;
   await load();
+startModel();
   window.scrollTo(0, y);
 }
 
@@ -111,7 +116,9 @@ async function load() {
   const settings = await readSettings();
   const { lastRun } = await chrome.storage.local.get("lastRun");
   state.lastRun = lastRun ?? null;
-  state.plan = buildPlan(await chrome.bookmarks.getTree(), settings);
+  const { smartMatching = true } = await chrome.storage.local.get("smartMatching");
+  state.smartMatching = smartMatching;
+  state.plan = buildPlan(await chrome.bookmarks.getTree(), { ...settings, embedder: smartMatching ? state.model.embedder : null });
 
   // Keep the user's ticks across reloads; moves that appear for the first time start selected.
   const previous = state.moves;
@@ -379,10 +386,44 @@ function unsureCard() {
   );
 }
 
+// The page appears right away using word matching; once the bundled model has been read the
+// plan is redone with it. If the model can't be read, everything keeps working without it.
+async function startModel() {
+  const started = performance.now();
+  try {
+    state.model.embedder = await loadEmbedder();
+    state.model.status = "ready";
+    state.model.seconds = (performance.now() - started) / 1000;
+  } catch {
+    state.model.status = "failed";
+  }
+  if (state.model.embedder && state.smartMatching) await load();
+  else render();
+}
+
+async function setSmartMatching(on) {
+  await chrome.storage.local.set({ smartMatching: on });
+  await load();
+}
+
+function smartMatchingFact() {
+  const { status } = state.model;
+  if (status === "loading") return el("li", { text: "Smart matching is getting ready. This takes a moment, and the list may grow when it's done." });
+  if (status === "failed") return el("li", { text: "Smart matching isn't available right now, so I'm only comparing websites and words." });
+  return el(
+    "li",
+    {},
+    state.smartMatching
+      ? "Smart matching is on: I also understand what a page is about, so a pasta recipe belongs with your recipes even if no word is shared. It knows everyday topics well, but not newer or very specific products. "
+      : "Smart matching is off, so I only compare websites and words. ",
+    el("button", { class: "textbtn", text: state.smartMatching ? "Turn it off" : "Turn it on", onclick: () => setSmartMatching(!state.smartMatching) }),
+  );
+}
+
 function aboutCard() {
   const d = state.plan.diagnostics;
   const facts = [
-    "I learn from how you already organize. I compare each bookmark's website and words with what's in your folders.",
+    "I learn from how you already organize. I compare each bookmark with what's in your folders.",
     "Everything is worked out on your computer. Nothing is uploaded anywhere.",
   ];
   if (d.foldersWithEnoughBookmarks) {
@@ -397,7 +438,7 @@ function aboutCard() {
   }
   return quietCard(
     { id: "sec-about", iconName: "info", title: "How I decide", blurb: "A quick look at how these suggestions are made." },
-    el("ul", { class: "facts" }, facts.map((text) => el("li", { text }))),
+    el("ul", { class: "facts" }, [...facts.slice(0, 2).map((text) => el("li", { text })), smartMatchingFact(), ...facts.slice(2).map((text) => el("li", { text }))]),
   );
 }
 
@@ -544,6 +585,7 @@ async function apply() {
   state.busy = false;
   state.justApplied = result.moved + result.removed > 0;
   await load();
+startModel();
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (result.error) toast(`I stopped early (${result.error}). You can undo what was done.`, "error");
   else if (!state.justApplied) toast("Nothing needed to change.");
@@ -556,6 +598,7 @@ async function undo() {
   await chrome.storage.local.remove("lastRun");
   state.justApplied = false;
   await load();
+startModel();
   if (errors.length) toast(`Mostly restored, but ${plural(errors.length, "thing")} couldn't be put back.`, "error");
   else toast("Everything is back where it was.");
 }
@@ -578,3 +621,4 @@ confirmDialog.addEventListener("click", (event) => {
   if (outside) confirmDialog.close("cancel");
 });
 await load();
+startModel();

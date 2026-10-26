@@ -1,0 +1,10 @@
+{
+  "source": "minishlab/potion-base-8M",
+  "license": "MIT",
+  "rows": 29528,
+  "dim": 256,
+  "unkId": 1,
+  "maxCharsPerWord": 100,
+  "continuingSubwordPrefix": "##",
+  "credit": "Static embeddings by MinishLab (model2vec), MIT licence."
+}

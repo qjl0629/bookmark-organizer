@@ -59,6 +59,15 @@ export function describeWhy(why) {
         ? `Fits better with your ${seen} in ${quote(why.folder)} than with the rest of ${quote(why.ownFolder)}.`
         : `Fits better in ${quote(why.folder)} than in ${quote(why.ownFolder)}.`;
     }
+    case "topic": {
+      const seen = quoteList(why.titles);
+      const base = seen ? `About the same thing as your ${seen} in ${quote(why.folder)}.` : `About the same subject as what's in ${quote(why.folder)}.`;
+      return why.ownFolder ? `${base} It doesn't match the rest of ${quote(why.ownFolder)}.` : base;
+    }
+    case "topicName":
+      return why.ownFolder
+        ? `Its subject fits the folder name ${quote(why.folder)}, not ${quote(why.ownFolder)}.`
+        : `Its subject fits the folder name ${quote(why.folder)}.`;
     case "otherKind": {
       const base = `${why.host} looks like ${kindOne(why.category)}, but most of ${quote(why.ownFolder)} is ${kindPhrase(why.ownKind)}.`;
       return why.folder ? `${base} ${quote(why.folder)} is a better home.` : base;

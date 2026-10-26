@@ -33,6 +33,26 @@ export function installDemo() {
         },
         { title: "Work", children: [{ title: "Team wiki", url: "https://team.notion.so/wiki", dateAdded: t(100) }] },
         {
+          title: "Project Atlas",
+          children: [
+            { title: "Atlas roadmap 2027", url: "https://wiki.corp.example/atlas/roadmap", dateAdded: t(95) },
+            { title: "Atlas design review notes", url: "https://wiki.corp.example/atlas/design-review", dateAdded: t(94) },
+            { title: "ATLAS-12 payment retries", url: "https://jira.corp.example/browse/ATLAS-12", dateAdded: t(93) },
+            { title: "Atlas launch plan", url: "https://wiki.corp.example/atlas/launch-plan", dateAdded: t(92) },
+            { title: "Atlas dashboard", url: "https://grafana.corp.example/d/atlas-overview", dateAdded: t(91) },
+          ],
+        },
+        {
+          title: "Onboarding",
+          children: [
+            { title: "Benefits enrollment guide", url: "https://hr.corp.example/benefits/enroll", dateAdded: t(85) },
+            { title: "Payroll and direct deposit", url: "https://hr.corp.example/payroll/deposit", dateAdded: t(84) },
+            { title: "Laptop setup checklist", url: "https://it.corp.example/setup/laptop", dateAdded: t(83) },
+            { title: "Org chart and who to ask", url: "https://hr.corp.example/people/org-chart", dateAdded: t(82) },
+            { title: "Atlas launch checklist", url: "https://wiki.corp.example/atlas/launch-checklist", dateAdded: t(81) },
+          ],
+        },
+        {
           title: "Buy",
           children: [
             { title: "Wireless earbuds", url: "https://www.amazon.ca/dp/B0EXAMPLE1", dateAdded: t(160) },

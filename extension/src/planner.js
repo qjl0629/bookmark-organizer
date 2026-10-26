@@ -1,5 +1,6 @@
 // Builds a reviewable plan from chrome.bookmarks.getTree() output. Pure functions only.
 import { categorize, categorizeHost } from "./categories.js";
+import { learnFromFolders } from "./learn.js";
 import { quickAccessReason } from "./quickaccess.js";
 import { baseDomain, hostOf, normalizeUrl } from "./url.js";
 
@@ -192,6 +193,7 @@ export function buildPlan(
   }
 
   const toExisting = (folder) => ({ folderId: folder.id, label: folder.path.join("/"), newFolder: null });
+  const learned = learnFromFolders(folders, bookmarks);
   // Largest folder first, so a loose shopping site goes to the main shopping folder.
   const categoryFolders = folderProfiles(folders, bookmarks).targets.sort((a, b) => b.list.length - a.list.length);
   const decisions = [];
@@ -231,24 +233,33 @@ export function buildPlan(
     }
     const category = categorize(bookmark.url, bookmark.title);
     const kindFolder = category && categoryFolders.find((t) => t.category === category);
-    if (!category) {
-      unclassified.push({ bookmark, reason: "No matching folder or known category" });
-    } else if (existing.has(category.toLowerCase())) {
+    if (category && existing.has(category.toLowerCase())) {
       decisions.push({
         bookmark,
         to: toExisting(existing.get(category.toLowerCase())),
         confidence: "medium",
         reason: `Category "${category}" matches your existing folder`,
       });
-    } else if (kindFolder) {
+      continue;
+    }
+    if (kindFolder) {
       decisions.push({
         bookmark,
         to: toExisting(kindFolder.folder),
         confidence: "medium",
         reason: `"${kindFolder.folder.path.join("/")}" mostly holds ${category} sites`,
       });
-    } else {
+      continue;
+    }
+    // Any site, known or not: which existing folder do its bookmarks resemble? This comes
+    // before suggesting a brand-new folder, so what you already have is reused first.
+    const similar = learned.suggestFolder(bookmark);
+    if (similar) {
+      decisions.push({ bookmark, to: toExisting(similar.folder), confidence: similar.confidence, reason: similar.reason });
+    } else if (category) {
       candidates.push({ bookmark, category });
+    } else {
+      unclassified.push({ bookmark, reason: "No matching folder or known category" });
     }
   }
 
@@ -288,7 +299,19 @@ export function buildPlan(
     reason,
   }));
   const duplicates = findDuplicates(bookmarks);
-  const review = findMisplaced(folders, bookmarks, dismissed);
+  // Two sources of "possibly misfiled": the site's kind (explicit, known sites) and what the
+  // folders have learned (any site). A bookmark is listed once, preferring the explicit one.
+  const kindFlags = findMisplaced(folders, bookmarks, dismissed);
+  const flagged = new Set(kindFlags.map((r) => r.id));
+  const learnedFlags = learned
+    .misplaced((b) => dismissed.has(dismissKey(b)))
+    .filter((r) => !flagged.has(r.id));
+  const all = [...kindFlags, ...learnedFlags];
+  // A flag with nowhere better to go can't be acted on, so it is counted but not listed.
+  const review = all
+    .filter((r) => r.to)
+    .sort((a, b) => CONFIDENCE_ORDER[a.confidence] - CONFIDENCE_ORDER[b.confidence] || a.fromPath.join("/").localeCompare(b.fromPath.join("/")));
+  const diagnostics = { ...learned.diagnostics(), noTarget: all.length - review.length };
 
   return {
     summary: {
@@ -304,6 +327,7 @@ export function buildPlan(
     moves,
     quickAccess,
     review,
+    diagnostics,
     barRootId,
     unclassified,
     duplicates,

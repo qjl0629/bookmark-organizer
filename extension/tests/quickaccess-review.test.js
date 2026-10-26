@@ -96,10 +96,10 @@ test("a video site inside a shopping folder is flagged, with the video folder as
   assert.equal(plan.moves.length, 0); // review items are suggestions, never part of the default moves
 });
 
-test("without a better folder the item is flagged with no destination", async () => {
-  const [item] = (await planFor([buy()])).review;
-  assert.equal(item.to, null);
-  assert.equal(item.confidence, "low");
+test("a flag with no better folder is counted but not listed, since there is nothing to act on", async () => {
+  const plan = await planFor([buy()]);
+  assert.equal(plan.review.length, 0);
+  assert.equal(plan.diagnostics.noTarget, 1);
 });
 
 test("mixed folders organized by purpose are not judged", async () => {

@@ -4,7 +4,7 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 
 - **Learns from you.** A loose bookmark follows the folder that already holds most bookmarks from the same site, or the folder that mostly holds that kind of site (a folder called "Buy" full of shopping sites counts as your shopping folder). Built-in categories are only a fallback.
 - **Your shortcuts stay put.** Things on the bookmarks bar that you click to *use* (Gmail, ChatGPT, bookmarklets, icon-only bookmarks, short-named home pages) are never moved. You can mark any item "Keep on bar" or "Organize it anyway", and it is remembered.
-- **Catches misfiled bookmarks.** Flags a bookmark whose site clearly belongs to a different kind of folder (a video site inside your shopping folder) and suggests where it should go. Suggestions are never pre-selected, and "Keep here" is remembered.
+- **Catches misfiled bookmarks.** Learns what each of your folders is about from what is already in it, then flags a bookmark that resembles a different folder much more than its own, and says which bookmarks it resembles. Works for work and internal sites too. Suggestions are never pre-selected, and "Keep here" is remembered.
 - **You approve everything.** Review proposed moves grouped by destination, untick anything you disagree with, then apply.
 - **One-click undo.** Restores the original positions of the last run.
 - **Private by design.** No account, no API key, no network requests. The only permissions are `bookmarks` and `storage`.
@@ -32,11 +32,16 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 5. **Built-in category** (Shopping, Social, Development, Video & Entertainment, Travel, ...). Suggested as a new folder only when at least 2 bookmarks fit.
 6. Otherwise it is left alone and listed under "Left alone".
 
-**Bookmarks already in folders** are only judged when the folder is clearly about one kind of site (at least 4 other bookmarks, 60% of them the same category). Then a bookmark from a known site of a different kind is flagged, with a destination if another folder fits. Folders organized by project or purpose, and holding folders such as "Read later", are never judged.
+**Bookmarks already in folders** are checked two ways, and only flagged when another folder clearly fits better:
+
+- **By content, learned from your own folders.** Each bookmark is turned into its address, the first parts of its path and the words in its title, then compared with what every folder already holds. A bookmark that resembles a different folder much more than its own is flagged, with the two or three bookmarks it resembles shown as the reason. This works for work and internal sites that no built-in list could know. As a test, every bookmark is hidden in turn and its folder guessed from the rest. Folders where that guess is right less than half the time (their bookmarks don't resemble each other) are skipped, and listed under "How I read your folders" so you can see why.
+- **By kind of site.** A shopping site inside a folder of videos, using the built-in categories. Holding folders such as "Read later" are never judged.
+
+Loose bookmarks that match no rule above are also placed by content similarity before a new folder is suggested.
 
 Every proposal shows its confidence and the reason.
 
-**Limits.** This is rule-based, so it judges by site, not by what a page says. Sites outside the built-in list can't be judged as misfiled, and a project folder that deliberately mixes site types looks "mixed" and is left alone. That is on purpose: a wrong suggestion costs more trust than a missed one.
+**Limits.** It judges by words and addresses, not by what a page says, so two unrelated pages with similar titles can be confused, and folders with fewer than 4 bookmarks can't be judged. On a library with few bookmarks per folder expect more false alarms, which is why nothing in "Possibly in the wrong folder" is pre-selected. A wrong suggestion costs more trust than a missed one.
 
 ## Try it without touching your bookmarks
 
@@ -56,6 +61,7 @@ node --test extension/tests/*.test.js    # Node 22+
 ```
 
 - `extension/src/planner.js`: classification and misfiled detection, pure functions
+- `extension/src/learn.js`: learns what each folder is about (TF-IDF similarity, leave-one-out check)
 - `extension/src/quickaccess.js`: which bookmarks-bar items count as shortcuts
 - `extension/src/url.js`: URL helpers
 - `extension/src/apply.js`: apply and undo through an injected bookmarks API

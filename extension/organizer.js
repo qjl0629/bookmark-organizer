@@ -8,7 +8,8 @@ if (isDemo) (await import("./src/demo.js")).installDemo();
 const $ = (id) => document.getElementById(id);
 const state = { plan: null, moves: new Set(), review: new Set(), removals: new Set(), seenMoves: new Set(), busy: false };
 
-// All bookmark text is inserted as text nodes, never as HTML.
+// All bookmark text is inserted as text nodes, never as HTML. Empty children (null, false)
+// are skipped, otherwise append() would print the word "null".
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -18,7 +19,7 @@ function el(tag, attrs = {}, ...children) {
     else if (value === true) node.setAttribute(key, "");
     else if (value !== false && value != null) node.setAttribute(key, value);
   }
-  node.append(...children.flat());
+  node.append(...children.flat(Infinity).filter((child) => child != null && child !== false));
   return node;
 }
 
@@ -81,7 +82,39 @@ function render() {
   renderDuplicates();
   renderQuickAccess();
   renderUnclassified();
+  renderDiagnostics();
   updateFooter();
+}
+
+const percent = (value) => `${Math.round(value * 100)}%`;
+
+// Explains how many bookmarks could actually be judged, so a short list isn't a mystery.
+function renderDiagnostics() {
+  const d = state.plan.diagnostics;
+  const root = $("diag");
+  const inFolders = state.plan.summary.bookmarks - state.plan.summary.loose;
+  if (!d.foldersWithEnoughBookmarks) {
+    root.replaceChildren(el("p", { class: "empty", text: "Not enough bookmarks in folders to learn from yet. Folders need at least 4 bookmarks." }));
+    return;
+  }
+  const lines = [
+    `${plural(inFolders, "bookmark")} sit inside folders. ${d.foldersJudged} of ${d.foldersWithEnoughBookmarks} folders with 4 or more bookmarks are clear enough to check by content (${plural(d.bookmarksInJudged, "bookmark")}).`,
+    `As a test, I hid each bookmark in turn and guessed its folder from the rest: right ${percent(d.accuracy)} of the time. A folder where I'm right less than half the time is not checked by content, because its bookmarks don't resemble each other.`,
+  ];
+  if (d.noTarget) lines.push(`${plural(d.noTarget, "bookmark")} looked out of place but no other folder fits, so nothing is suggested for them.`);
+  root.replaceChildren(
+    ...lines.map((text) => el("p", { text })),
+    d.mixed.length
+      ? el(
+          "details",
+          { class: "group" },
+          el("summary", {}, el("span", { class: "group-name", text: "Folders not checked by content (bookmarks look unrelated to each other)" }), el("span", { class: "count", text: plural(d.mixed.length, "folder") })),
+          d.mixed.map((m) =>
+            el("div", { class: "row keep" }, el("span", {}), el("span", { class: "title", text: m.path }), el("span", { class: "host", text: `${plural(m.size, "bookmark")}, ${percent(m.coherence)} recognizable` }), el("span", { class: "badge low", text: "skipped" })),
+          ),
+        )
+      : null,
+  );
 }
 
 function renderStats() {

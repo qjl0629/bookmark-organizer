@@ -1,12 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "Bookmark Organizer",
-  "version": "0.1.0",
-  "description": "Clean up your bookmarks. Learns from your own folders, previews every move, and can undo. Runs entirely on your device.",
+  "name": "Marksly: Bookmark Organizer",
+  "version": "1.0.0",
+  "description": "Tidy your bookmarks in a few clicks. See every move first, undo anytime. Runs on your device: no account, no upload.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": ["bookmarks", "storage"],
   "optional_permissions": ["history"],
   "action": {
-    "default_title": "Organize bookmarks"
+    "default_title": "Organize bookmarks with Marksly",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
   },
   "background": {
     "service_worker": "background.js"

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>numbers</title>
+  <link rel="stylesheet" href="common.css">
+  <style>
+    h2 { font-size: 84px; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 54px; }
+    .box { padding: 44px 40px 48px; }
+    .box .label { font-size: 34px; font-weight: 700; color: #6b6b8d; }
+    .box .big { font-size: 170px; font-weight: 850; letter-spacing: -0.03em; line-height: 1.05; margin-top: 18px; }
+    .box.old .big { color: #b3b3c8; }
+    .box.new .big { background: linear-gradient(90deg, #4f46e5, #8b3df0); -webkit-background-clip: text; color: transparent; }
+    .box .sub { font-size: 32px; line-height: 1.45; color: #55557a; margin-top: 16px; }
+    .table { margin-top: 30px; padding: 12px 40px; }
+    .tr { display: flex; justify-content: space-between; align-items: center; font-size: 36px; font-weight: 650; padding: 24px 0; border-bottom: 2px solid #efeefc; }
+    .tr:last-child { border-bottom: 0; }
+    .tr small { display: block; font-size: 27px; font-weight: 500; color: #6b6b8d; margin-top: 4px; }
+    .tr b { font-size: 44px; font-weight: 800; color: #4338ca; }
+    .note { margin-top: 28px; font-size: 30px; line-height: 1.5; color: #55557a; }
+  </style>
+</head>
+<body>
+  <div class="brand"><img src="../../../extension/icons/icon-128.png" alt="">Marksly<small>书签整理师</small></div>
+  <h2>只看关键词，<br><em>一个都没找出来</em></h2>
+  <div class="cols">
+    <div class="card box old"><div class="label">只匹配关键词</div><div class="big">0/22</div><div class="sub">故意放错的书签，<br>一个都没发现</div></div>
+    <div class="card box new"><div class="label">加了 8MB 本地小模型</div><div class="big">18/22</div><div class="sub">两个测试库合计，<br>全程离线</div></div>
+  </div>
+  <div class="card table">
+    <div class="tr"><div>调参用的测试库<small>其中 1 个误报</small></div><b>11 / 14</b></div>
+    <div class="tr"><div>没调过参的测试库<small>0 个误报</small></div><b>7 / 8</b></div>
+  </div>
+  <p class="note">测试库是我自己虚构的，不代表你的书签。它也有不懂的：比如不认识 “Copilot Studio” 属于 “Power Platform”。</p>
+  <div class="footer"><span>数据来自仓库里的自动化测试</span><span>下一张 →</span></div>
+</body>
+</html>

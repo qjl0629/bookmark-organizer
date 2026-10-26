@@ -1,0 +1,63 @@
+<!doctype html>
+<!-- Staging page for screenshots and the demo GIF. It loads the real app in demo mode (fictional data)
+     and trims what is shown. Parameters:
+       show=sec-review,sec-order   keep only these cards (default: all)
+       hero=0                      hide the headline block
+       bar=0                       hide the floating action bar
+       expand=1                    expand "Show N more" lists
+       step=ticked|confirm|done    simulate selecting everything, the confirm dialog, or the finished run
+       theme=dark                  dark mode
+     Served from the repository root: python3 -m http.server --directory . -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <base href="/extension/">
+  <title>stage</title>
+</head>
+<body>
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const page = new DOMParser().parseFromString(await (await fetch("organizer.html")).text(), "text/html");
+    for (const node of page.head.querySelectorAll("link")) document.head.append(node);
+    document.body.innerHTML = page.body.innerHTML.replace(/<script[\s\S]*?<\/script>/g, "");
+    if (params.get("theme") === "dark") document.documentElement.style.colorScheme = "dark";
+
+    await import("./organizer.js");
+
+    const wait = (test, ms = 15000) =>
+      new Promise((resolve) => {
+        const started = Date.now();
+        const tick = () => (test() || Date.now() - started > ms ? resolve() : setTimeout(tick, 100));
+        tick();
+      });
+    const ready = () => document.querySelector(".hero") && /Smart matching is on/.test(document.body.textContent);
+    await wait(ready);
+    await new Promise((r) => setTimeout(r, 300));
+
+    if (params.get("expand") === "1") for (const more of document.querySelectorAll(".more")) more.click();
+
+    const step = params.get("step");
+    if (step === "ticked") document.getElementById("selectAllBtn").click();
+    if (step === "confirm" || step === "done") {
+      document.getElementById("tidyAllBtn").click();
+      await wait(() => document.getElementById("confirmDialog").open);
+    }
+    if (step === "done") {
+      document.getElementById("confirmDialog").close("ok");
+      await wait(() => document.querySelector(".banner"));
+      await new Promise((r) => setTimeout(r, 2000)); // the page re-renders once more after the run
+    }
+
+    const show = params.get("show");
+    if (show) {
+      const keep = new Set(show.split(","));
+      for (const node of [...document.getElementById("app").children]) {
+        if (!keep.has(node.id) && !(params.get("hero") !== "0" && node.classList.contains("hero")) && !node.classList.contains("banner")) node.remove();
+      }
+    }
+    if (params.get("hero") === "0") document.querySelector(".hero")?.remove();
+    if (params.get("bar") === "0") document.getElementById("actionbar").hidden = true;
+    document.documentElement.dataset.ready = "1";
+  </script>
+</body>
+</html>

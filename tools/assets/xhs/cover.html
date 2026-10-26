@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>cover</title>
+  <link rel="stylesheet" href="common.css">
+  <style>
+    h1 { font-size: 112px; margin-top: 52px; }
+    .lead { font-size: 46px; margin-top: 22px; }
+    .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; margin-top: 44px; flex: 1; min-height: 0; }
+    .panel { padding: 28px 28px; display: flex; flex-direction: column; }
+    .panel h3 { font-size: 36px; font-weight: 750; margin-bottom: 16px; display: flex; align-items: center; gap: 14px; }
+    .tag-before { color: #9a5b00; } .tag-after { color: #17703a; }
+    .rows { display: grid; gap: 6px; }
+    .row { display: flex; align-items: center; gap: 14px; padding: 7px 16px; border-radius: 15px; background: #f4f3ff; font-size: 29px; font-weight: 600; }
+    .row svg { flex: none; color: #6b6bd6; }
+    .row .n { margin-left: auto; font-size: 26px; font-weight: 600; color: #7b7b9c; }
+    .row .note { font-size: 24px; font-weight: 650; padding: 3px 12px; border-radius: 999px; }
+    .row.bad { background: #fff3dc; } .row.bad svg { color: #c27a00; }
+    .row.bad .note { background: #ffe2a8; color: #7a4600; }
+    .row.good .note { background: #cdeed9; color: #12613a; }
+    .row.good { background: #eaf8ef; } .row.good svg { color: #1c8d50; }
+    .row.keep { background: #eef0ff; }
+    .row.loose { background: #fff3dc; color: #7a4600; }
+    .arrow { position: absolute; left: 50%; top: 56%; transform: translate(-50%, -50%); width: 96px; height: 96px; border-radius: 50%;
+      background: linear-gradient(135deg, #4f46e5, #7c3aed); display: grid; place-items: center; color: #fff; box-shadow: 0 16px 40px rgba(79,70,229,.45); z-index: 2; }
+    .wrap { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; margin-bottom: 26px; }
+  </style>
+</head>
+<body>
+  <div class="brand"><img src="../../../extension/icons/icon-128.png" alt="">Marksly<small>书签整理师</small></div>
+  <h1>收藏夹<em>乱成一锅粥</em>？</h1>
+  <p class="lead">我做了个 Chrome 插件，点几下就理顺</p>
+  <div class="wrap">
+    <div class="compare" id="compare"></div>
+    <div class="arrow"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+  </div>
+  <div class="footer"><span>开源 · 本地运行 · 不上传任何数据</span><span>GitHub: qjl0629/bookmark-organizer</span></div>
+  <script type="module">
+    import { beforeAfter } from "./tree.js";
+    const { before, after } = await beforeAfter();
+    const SHORTCUTS = new Set(["Gmail", "ChatGPT", "Google Calendar"]);
+    const folderIcon = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+    const markIcon = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>';
+    const row = (title, n, cls = "", note = "", icon = folderIcon) =>
+      `<div class="row ${cls}">${icon}<span>${title}</span>${note ? `<span class="note">${note}</span>` : ""}<span class="n">${n}</span></div>`;
+
+    const beforeFolders = before.bar.filter((x) => x.folder);
+    const looseCount = before.bar.filter((x) => !x.folder && !SHORTCUTS.has(x.title)).length;
+    const beforeNames = new Set(beforeFolders.map((f) => f.title));
+    const beforeRows = [
+      ...before.bar.filter((x) => SHORTCUTS.has(x.title)).map((x) => row(x.title, "", "keep", "", markIcon)),
+      ...beforeFolders.map((f) => row(f.title, f.count || "空", /^(New folder|Old|Cooking)$/.test(f.title) ? "bad" : "", f.title === "New folder" ? "没名字" : f.title === "Old" ? "空的" : f.title === "Cooking" ? "和 Recipes 重复" : "")),
+      row(`散落在书签栏`, `${looseCount} 条`, "loose", "", markIcon),
+    ];
+    const afterFolders = after.bar.filter((x) => x.folder);
+    const afterRows = [
+      ...after.bar.filter((x) => SHORTCUTS.has(x.title)).map((x) => row(x.title, "", "keep", "", markIcon)),
+      ...afterFolders.map((f, i) => {
+        const wasAt = beforeFolders.findIndex((b) => b.title === f.title);
+        const renamed = !beforeNames.has(f.title);
+        const moved = wasAt > i;
+        return row(f.title, f.count, renamed || moved ? "good" : "", renamed ? "已命名" : moved ? "常用置顶" : "");
+      }),
+    ];
+    document.getElementById("compare").innerHTML = `
+      <div class="card panel"><h3 class="tag-before"><span class="pill amber"><span class="dot"></span>整理前</span></h3><div class="rows">${beforeRows.join("")}</div></div>
+      <div class="card panel"><h3 class="tag-after"><span class="pill green"><span class="dot"></span>整理后</span></h3><div class="rows">${afterRows.join("")}</div></div>`;
+    document.documentElement.dataset.ready = "1";
+  </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+/* Shared look for the 小红书 images (1242 x 1660, 3:4). */
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 1242px; height: 1660px; overflow: hidden; }
+body {
+  font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  color: #14142b;
+  background:
+    radial-gradient(900px 700px at 100% -5%, #e4dcff 0%, transparent 60%),
+    radial-gradient(800px 700px at -10% 105%, #d8e6ff 0%, transparent 60%),
+    #f6f5ff;
+  padding: 84px 84px 72px;
+  display: flex; flex-direction: column;
+}
+.brand { display: flex; align-items: center; gap: 20px; font-size: 38px; font-weight: 700; letter-spacing: -0.01em; }
+.brand img { width: 64px; height: 64px; border-radius: 17px; box-shadow: 0 10px 28px rgba(79, 70, 229, 0.35); }
+.brand small { font-size: 28px; font-weight: 500; color: #6b6b8d; margin-left: 4px; }
+h1 { font-size: 108px; line-height: 1.12; font-weight: 800; letter-spacing: -0.02em; margin-top: 64px; }
+h1 em { font-style: normal; background: linear-gradient(90deg, #4f46e5, #8b3df0); -webkit-background-clip: text; color: transparent; }
+h2 { font-size: 78px; line-height: 1.15; font-weight: 800; letter-spacing: -0.015em; margin-top: 60px; }
+h2 em { font-style: normal; background: linear-gradient(90deg, #4f46e5, #8b3df0); -webkit-background-clip: text; color: transparent; }
+.lead { font-size: 44px; line-height: 1.5; color: #4a4a68; margin-top: 30px; }
+.card {
+  background: #fff; border: 2px solid #e6e4fb; border-radius: 40px; box-shadow: 0 24px 60px rgba(79, 70, 229, 0.12);
+}
+.footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; font-size: 30px; color: #6b6b8d; }
+.pill { display: inline-flex; align-items: center; gap: 12px; padding: 14px 28px; border-radius: 999px; font-size: 32px; font-weight: 650; background: #ecebff; color: #4338ca; }
+.pill.green { background: #e2f6ea; color: #17703a; }
+.pill.amber { background: #fff1d6; color: #9a5b00; }
+.dot { width: 14px; height: 14px; border-radius: 50%; background: currentColor; }

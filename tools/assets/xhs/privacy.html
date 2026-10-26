@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>privacy</title>
+  <link rel="stylesheet" href="common.css">
+  <style>
+    h2 { font-size: 92px; }
+    .list { display: grid; gap: 26px; margin-top: 52px; }
+    .row { padding: 34px 40px; display: flex; align-items: center; gap: 30px; font-size: 42px; font-weight: 700; line-height: 1.35; }
+    .row small { display: block; font-size: 30px; font-weight: 500; color: #5a5a7e; margin-top: 6px; }
+    .tick { flex: none; width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center; background: #e2f6ea; color: #17703a; }
+    .tick svg { width: 42px; height: 42px; }
+  </style>
+</head>
+<body>
+  <div class="brand"><img src="../../../extension/icons/icon-128.png" alt="">Marksly<small>书签整理师</small></div>
+  <h2><em>全程本地</em>，<br>不上传你的书签</h2>
+  <div class="list" id="list"></div>
+  <div class="footer"><span>开源，代码都在 GitHub 上</span><span>下一张 →</span></div>
+  <script>
+    const tick = '<div class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>';
+    const rows = [
+      ["不用账号，不用 API Key", "没有任何注册和付费"],
+      ["插件本身不联网", "只读取自带的文件，有自动化测试守着；“访问次数”是可选权限，默认不开"],
+      ["“看懂内容”的模型内置在插件里", "约 8MB，离线运行，不调用任何 AI 服务"],
+      ["每一步先预览，一键撤销", "你点头才会动，动完也能全部恢复"],
+      ["书签栏的 Gmail、ChatGPT 不乱动", "常点的快捷方式一律原地不动"],
+    ];
+    document.getElementById("list").innerHTML = rows.map(([t, s]) => `<div class="card row">${tick}<div>${t}<small>${s}</small></div></div>`).join("");
+  </script>
+</body>
+</html>

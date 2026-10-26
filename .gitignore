@@ -9,6 +9,7 @@ bookmarks*.json
 backups/
 output/
 plans/
+dist/
 
 # Secrets
 .env

@@ -19,6 +19,18 @@ test("only the model loader reads anything over fetch, and nothing else can reac
   assert.ok(!/https?:\/\//.test(sources.find(([name]) => name === "src/model-loader.js")[1].replace(/\/\/.*$/gm, "")), "the loader names no website");
 });
 
+test("the extension ships its icons, a Web Store-sized description, and a release version", () => {
+  const manifest = JSON.parse(readFileSync(new URL("manifest.json", root), "utf8"));
+  assert.ok(manifest.description.length <= 132, "the Chrome Web Store allows 132 characters");
+  assert.ok(manifest.name.length <= 75);
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
+  for (const size of ["16", "32", "48", "128"]) {
+    const file = readFileSync(new URL(manifest.icons[size], root));
+    assert.equal(file.readUInt32BE(16), Number(size), `icon ${size} has the wrong width`);
+    assert.equal(file.readUInt32BE(20), Number(size), `icon ${size} has the wrong height`);
+  }
+});
+
 test("the model is loaded once at startup, not again after every change", () => {
   const page = sources.find(([name]) => name === "organizer.js")[1];
   assert.equal((page.match(/(?<!function )\bstartModel\(\)/g) ?? []).length, 1);

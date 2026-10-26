@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>features</title>
+  <link rel="stylesheet" href="common.css">
+  <style>
+    h2 { font-size: 80px; margin-top: 44px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 40px; }
+    .tile { padding: 28px 32px 32px; }
+    .ico { width: 84px; height: 84px; border-radius: 24px; display: grid; place-items: center; background: #ecebff; color: #4f46e5; }
+    .ico svg { width: 46px; height: 46px; }
+    .tile h3 { font-size: 42px; font-weight: 780; margin-top: 20px; }
+    .tile p { font-size: 29px; line-height: 1.45; color: #55557a; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="brand"><img src="../../../extension/icons/icon-128.png" alt="">Marksly<small>书签整理师</small></div>
+  <h2>不只是分类，<br><em>顺序也帮你理</em></h2>
+  <div class="grid" id="grid"></div>
+  <div class="footer"><span>每一项都能单独勾选</span><span>下一张 →</span></div>
+  <script>
+    const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+    const tiles = [
+      ["放错的揪出来", "看内容，不只看网址，放错文件夹的会被挑出来", svg('<path d="M7 7h11l-3-3M17 17H6l3 3"/>')],
+      ["常用的置顶", "每个文件夹里，你最常点开的排在最上面", svg('<path d="M12 19V5M6 11l6-6 6 6"/>')],
+      ["吃灰的收起来", "一年没点开过的，放进 Archive，不删除", svg('<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>')],
+      ["重复的合并", "同一个网址存了两次，只留一份", svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>')],
+      ["空文件夹清掉", "没东西的文件夹，一键删除", svg('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>')],
+      ["没名字的起名字", "“New folder”会按里面的内容改成合适的名字", svg('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>')],
+    ];
+    document.getElementById("grid").innerHTML = tiles.map(([t, p, i]) => `<div class="card tile"><div class="ico">${i}</div><h3>${t}</h3><p>${p}</p></div>`).join("");
+  </script>
+</body>
+</html>

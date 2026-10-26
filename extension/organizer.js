@@ -14,8 +14,10 @@ const state = {
   moves: new Set(),
   review: new Set(),
   removals: new Set(),
+  folderOps: new Set(),
+  seenFolderOps: new Set(),
   seenMoves: new Set(),
-  expanded: { moves: false, review: false, dups: false },
+  expanded: { moves: false, review: false, dups: false, folders: false },
   justApplied: false,
   busy: false,
   // "loading" until the bundled model is read, then "ready"; "failed" means word matching only.
@@ -94,7 +96,6 @@ async function changeSettings(mutate) {
   await chrome.storage.local.set(Object.fromEntries(SETTING_KEYS.map((key) => [key, [...settings[key]]])));
   const y = window.scrollY;
   await load();
-startModel();
   window.scrollTo(0, y);
 }
 
@@ -127,6 +128,13 @@ async function load() {
   state.seenMoves = new Set(state.plan.moves.map((m) => m.id));
   state.review = new Set([...state.review].filter((id) => state.plan.review.some((r) => r.id === id)));
   state.removals = new Set();
+  // Certain folder changes (empty folders, same-name folders side by side) start ticked; the
+  // rest wait for the user, like possible mix-ups do.
+  const previousOps = state.folderOps;
+  state.folderOps = new Set(
+    state.plan.folderOps.filter((op) => (!state.seenFolderOps.has(op.id) && op.confidence === "high") || previousOps.has(op.id)).map((op) => op.id),
+  );
+  state.seenFolderOps = new Set(state.plan.folderOps.map((op) => op.id));
   render();
 }
 
@@ -134,7 +142,8 @@ const duplicateRows = () =>
   state.plan.duplicates.flatMap((group) =>
     group.slice(1).map((b) => ({ id: b.id, title: b.title, url: b.url, path: b.path, keepPath: group[0].path })),
   );
-const changeCount = () => state.plan.moves.length + state.plan.review.length + duplicateRows().length;
+const changeCount = () => state.plan.moves.length + state.plan.review.length + duplicateRows().length + state.plan.folderOps.length;
+const selectedFolderOps = () => state.plan.folderOps.filter((op) => state.folderOps.has(op.id));
 
 // Moves the user has ticked. A bookmark that is also ticked for removal is only removed.
 const selectedMoves = () =>
@@ -321,6 +330,47 @@ function reviewCard() {
   });
 }
 
+function foldersCard() {
+  const items = state.plan.folderOps;
+  if (!items.length) return null;
+  const actions = { delete: "Delete empty folder", merge: "Merge folders", rename: "Rename folder" };
+  return planCard({
+    id: "sec-folders",
+    kind: "folders",
+    iconName: "folder",
+    title: "Tidy your folders",
+    blurb: "Empty folders, duplicates and folders without a clear name. Merging moves everything inside into the folder that stays.",
+    items,
+    selected: state.folderOps,
+    row: (item) => {
+      const from = item.kind === "merge" ? item.fromPath : item.path;
+      const toNode =
+        item.kind === "delete"
+          ? el("span", { class: "chip remove" }, icon("trash", 15), el("span", { class: "name", text: "Delete this folder" }))
+          : folderChipEl(item.kind === "merge" ? item.toPath : [...item.path.slice(0, -1), item.toTitle], "to");
+      const row = el("li", { class: `row${state.folderOps.has(item.id) ? " is-selected" : ""}` });
+      row.append(
+        checkbox(state.folderOps.has(item.id), `Select: ${actions[item.kind]} ${from[from.length - 1]}`, (on) => {
+          if (on) state.folderOps.add(item.id);
+          else state.folderOps.delete(item.id);
+          row.classList.toggle("is-selected", on);
+          updateBar();
+        }),
+        el(
+          "div",
+          { class: "site" },
+          el("span", { class: "avatar", style: "--h:215", "aria-hidden": "true" }, icon("folder", 18)),
+          el("div", { class: "site-text" }, el("div", { class: "title", text: actions[item.kind] }), el("div", { class: "domain", text: item.count ? plural(item.count, "item") : "Empty" })),
+        ),
+        route(from, toNode),
+        sure(item.confidence),
+        el("p", { class: "why", text: describeWhy(item.why) }),
+      );
+      return row;
+    },
+  });
+}
+
 function dupsCard() {
   const items = duplicateRows();
   if (!items.length) return null;
@@ -445,9 +495,15 @@ function aboutCard() {
 function bannerNode() {
   const run = state.lastRun;
   if (!run) return null;
-  const moved = run.moved.length;
+  const moved = run.moved.length - (run.carried ?? 0);
   const removed = run.removed.length;
-  const parts = [moved ? plural(moved, "bookmark moved", "bookmarks moved") : null, removed ? plural(removed, "duplicate removed", "duplicates removed") : null].filter(Boolean);
+  const parts = [
+    moved ? plural(moved, "bookmark moved", "bookmarks moved") : null,
+    run.merged ? plural(run.merged, "folder merged", "folders merged") : null,
+    run.renamed?.length ? plural(run.renamed.length, "folder renamed", "folders renamed") : null,
+    run.deleted ? plural(run.deleted, "empty folder deleted", "empty folders deleted") : null,
+    removed ? plural(removed, "duplicate removed", "duplicates removed") : null,
+  ].filter(Boolean);
   return el(
     "div",
     { class: "banner", role: "status" },
@@ -505,8 +561,8 @@ function heroNode() {
 
 // ---------------------------------------------------------------- rendering
 
-const CARD_BUILDERS = { moves: movesCard, review: reviewCard, dups: dupsCard };
-const CARD_IDS = { moves: "sec-moves", review: "sec-review", dups: "sec-dups" };
+const CARD_BUILDERS = { moves: movesCard, review: reviewCard, folders: foldersCard, dups: dupsCard };
+const CARD_IDS = { moves: "sec-moves", review: "sec-review", folders: "sec-folders", dups: "sec-dups" };
 
 // Re-render one card after a bulk change so the page doesn't jump or collapse other cards.
 function refreshCard(kind) {
@@ -518,7 +574,7 @@ function refreshCard(kind) {
 function render() {
   $("demoBadge").hidden = !isDemo;
   $("app").replaceChildren(
-    ...[bannerNode(), heroNode(), movesCard(), reviewCard(), dupsCard(), shortcutsCard(), unsureCard(), aboutCard()].filter(Boolean),
+    ...[bannerNode(), heroNode(), movesCard(), reviewCard(), foldersCard(), dupsCard(), shortcutsCard(), unsureCard(), aboutCard()].filter(Boolean),
   );
   updateBar();
 }
@@ -528,8 +584,15 @@ function updateBar() {
   bar.hidden = changeCount() === 0;
   const moves = selectedMoves().length;
   const removals = state.removals.size;
-  const total = moves + removals;
-  const detail = [moves ? `Moving ${plural(moves, "bookmark")}` : null, removals ? `removing ${plural(removals, "duplicate")}` : null].filter(Boolean).join(", ");
+  const folders = selectedFolderOps().length;
+  const total = moves + removals + folders;
+  const detail = [
+    moves ? `Moving ${plural(moves, "bookmark")}` : null,
+    folders ? `${moves ? "changing" : "Changing"} ${plural(folders, "folder")}` : null,
+    removals ? `${moves || folders ? "removing" : "Removing"} ${plural(removals, "duplicate")}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
   $("selection").replaceChildren(
     total ? `${plural(total, "change")} selected` : "Nothing selected yet",
     el("small", { text: total ? detail : "Tick what you'd like me to do" }),
@@ -542,6 +605,7 @@ function updateBar() {
 function selectEverything(on) {
   state.moves = new Set(on ? state.plan.moves.map((m) => m.id) : []);
   state.review = new Set(on ? state.plan.review.map((r) => r.id) : []);
+  state.folderOps = new Set(on ? state.plan.folderOps.map((op) => op.id) : []);
   state.removals = new Set(on ? duplicateRows().map((d) => d.id) : []);
   for (const kind of Object.keys(CARD_BUILDERS)) refreshCard(kind);
   updateBar();
@@ -552,14 +616,18 @@ function tidyEverything() {
   return apply();
 }
 
-function confirmTidy(moves, removeIds) {
+function confirmTidy(moves, removeIds, folderOps) {
   const newFolders = new Set(moves.filter((m) => m.to.newFolder).map((m) => m.to.path.join("›")));
   const lines = [];
   const filed = moves.filter((m) => !state.plan.review.includes(m));
   const misplaced = moves.length - filed.length;
+  const count = (kind) => folderOps.filter((op) => op.kind === kind).length;
   if (filed.length) lines.push(`Move ${plural(filed.length, "bookmark")} into folders`);
   if (misplaced) lines.push(`Move ${plural(misplaced, "bookmark")} to a better folder`);
   if (newFolders.size) lines.push(`Create ${plural(newFolders.size, "new folder")}`);
+  if (count("merge")) lines.push(`Merge ${plural(count("merge"), "folder")} into another (everything inside moves with it)`);
+  if (count("rename")) lines.push(`Rename ${plural(count("rename"), "folder")}`);
+  if (count("delete")) lines.push(`Delete ${plural(count("delete"), "empty folder")}`);
   if (removeIds.length) lines.push(`Remove ${plural(removeIds.length, "duplicate copy", "duplicate copies")}`);
   $("confirmList").replaceChildren(...lines.map((text) => el("li", {}, icon("check", 18, 2.5), text)));
 
@@ -575,17 +643,18 @@ async function apply() {
   if (state.busy) return;
   const moves = selectedMoves();
   const removeIds = [...state.removals];
-  if (!moves.length && !removeIds.length) return;
-  if (!(await confirmTidy(moves, removeIds))) return;
+  const folderOps = selectedFolderOps();
+  if (!moves.length && !removeIds.length && !folderOps.length) return;
+  if (!(await confirmTidy(moves, removeIds, folderOps))) return;
 
   state.busy = true;
   updateBar();
-  const result = await applyPlan(chrome.bookmarks, { moves, removeIds });
-  if (result.moved + result.removed > 0) await chrome.storage.local.set({ lastRun: result.undo });
+  const result = await applyPlan(chrome.bookmarks, { moves, removeIds, folderOps });
+  const done = result.moved + result.removed + result.merged + result.deleted + result.renamed;
+  if (done > 0) await chrome.storage.local.set({ lastRun: result.undo });
   state.busy = false;
-  state.justApplied = result.moved + result.removed > 0;
+  state.justApplied = done > 0;
   await load();
-startModel();
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (result.error) toast(`I stopped early (${result.error}). You can undo what was done.`, "error");
   else if (!state.justApplied) toast("Nothing needed to change.");
@@ -598,7 +667,6 @@ async function undo() {
   await chrome.storage.local.remove("lastRun");
   state.justApplied = false;
   await load();
-startModel();
   if (errors.length) toast(`Mostly restored, but ${plural(errors.length, "thing")} couldn't be put back.`, "error");
   else toast("Everything is back where it was.");
 }

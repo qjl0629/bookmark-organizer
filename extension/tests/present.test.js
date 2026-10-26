@@ -19,6 +19,12 @@ test("each kind of reason reads as a plain sentence", () => {
   assert.equal(describeWhy({ type: "topic", titles: [], folder: "Recipes" }), "About the same subject as what's in “Recipes”.");
   assert.equal(describeWhy({ type: "topicName", folder: "Travel", ownFolder: "Finance" }), "Its subject fits the folder name “Travel”, not “Finance”.");
   assert.equal(describeWhy({ type: "topicName", folder: "Travel" }), "Its subject fits the folder name “Travel”.");
+  assert.equal(describeWhy({ type: "emptyFolder" }), "Nothing is in this folder.");
+  assert.equal(describeWhy({ type: "mergeSameName", sameParent: true, from: "Travels", to: "Travel" }), "You have two folders called “Travel” side by side. I'd put everything in one.");
+  assert.match(describeWhy({ type: "mergeSameName", sameParent: false, to: "Dev" }), /different places are both called “Dev”/);
+  assert.equal(describeWhy({ type: "mergeNameless", from: "New folder", to: "Money", titles: ["Savings rates"] }), "“New folder” doesn't say what's in it. It holds “Savings rates”, the same kind of thing as your “Money” folder.");
+  assert.equal(describeWhy({ type: "mergeSimilar", from: "Recipes", to: "Cooking", titles: [] }), "“Recipes” holds the same kind of things as “Cooking”.");
+  assert.equal(describeWhy({ type: "renameVague", from: "Untitled", to: "Photography", titles: ["Best lenses", "Golden hour"] }), "“Untitled” doesn't say what's in it. It holds “Best lenses” and “Golden hour”, so “Photography” would tell you at a glance.");
   assert.equal(describeWhy({ type: "newFolder", category: "Travel" }), "Looks like travel sites. I'd start a new “Travel” folder for these.");
   assert.match(describeWhy({ type: "otherKind", host: "netflix.com", category: "Video & Entertainment", ownKind: "Shopping", ownFolder: "Buy", folder: "Watch" }), /netflix\.com looks like a video or entertainment site, but most of “Buy” is shopping sites\. “Watch” is a better home\./);
   assert.match(describeWhy({ type: "duplicate", keepFolder: "Dev" }), /earlier copy in “Dev”/);

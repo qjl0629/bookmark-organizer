@@ -68,6 +68,24 @@ export function describeWhy(why) {
       return why.ownFolder
         ? `Its subject fits the folder name ${quote(why.folder)}, not ${quote(why.ownFolder)}.`
         : `Its subject fits the folder name ${quote(why.folder)}.`;
+    case "emptyFolder":
+      return "Nothing is in this folder.";
+    case "mergeSameName":
+      return why.sameParent
+        ? `You have two folders called ${quote(why.to)} side by side. I'd put everything in one.`
+        : `Two folders in different places are both called ${quote(why.to)}. I'd put everything in one.`;
+    case "mergeNameless": {
+      const seen = quoteList(why.titles);
+      return seen ? `${quote(why.from)} doesn't say what's in it. It holds ${seen}, the same kind of thing as your ${quote(why.to)} folder.` : `${quote(why.from)} doesn't say what's in it, and it holds the same kind of thing as your ${quote(why.to)} folder.`;
+    }
+    case "mergeSimilar": {
+      const seen = quoteList(why.titles);
+      return seen ? `${quote(why.from)} holds the same kind of things as ${quote(why.to)}, like ${seen}.` : `${quote(why.from)} holds the same kind of things as ${quote(why.to)}.`;
+    }
+    case "renameVague": {
+      const seen = quoteList(why.titles);
+      return seen ? `${quote(why.from)} doesn't say what's in it. It holds ${seen}, so ${quote(why.to)} would tell you at a glance.` : `${quote(why.from)} doesn't say what's in it. ${quote(why.to)} fits what it holds.`;
+    }
     case "otherKind": {
       const base = `${why.host} looks like ${kindOne(why.category)}, but most of ${quote(why.ownFolder)} is ${kindPhrase(why.ownKind)}.`;
       return why.folder ? `${base} ${quote(why.folder)} is a better home.` : base;

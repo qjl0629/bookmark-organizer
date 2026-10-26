@@ -49,6 +49,15 @@ export function createMemoryBookmarks(roots) {
     async get(id) {
       return [view(need(id), false)];
     },
+    async getChildren(id) {
+      return need(id).children.map((child) => view(child, false));
+    },
+    async update(id, changes) {
+      const node = need(id);
+      if (changes.title !== undefined) node.title = changes.title;
+      if (changes.url !== undefined && node.url !== undefined) node.url = changes.url;
+      return view(node, false);
+    },
     async create({ parentId, index, title = "", url }) {
       const parent = need(parentId);
       if (parent.url !== undefined) throw new Error("Parent is not a folder.");

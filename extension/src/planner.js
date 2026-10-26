@@ -1,5 +1,6 @@
 // Builds a reviewable plan from chrome.bookmarks.getTree() output. Pure functions only.
 import { categorize, categorizeHost } from "./categories.js";
+import { planFolderChanges } from "./folders.js";
 import { learnFromFolders } from "./learn.js";
 import { quickAccessReason } from "./quickaccess.js";
 import { baseDomain, hostOf, normalizeUrl } from "./url.js";
@@ -26,7 +27,7 @@ export function flatten(tree) {
         });
       } else {
         const childPath = [...path, child.title];
-        folders.push({ id: child.id, title: child.title, path: childPath, empty: !child.children?.length });
+        folders.push({ id: child.id, title: child.title, path: childPath, parentId: node.id, empty: !child.children?.length });
         walk(child, childPath);
       }
     }
@@ -347,6 +348,24 @@ export function buildPlan(
     .sort((a, b) => CONFIDENCE_ORDER[a.confidence] - CONFIDENCE_ORDER[b.confidence] || a.fromPath.join("/").localeCompare(b.fromPath.join("/")));
   const diagnostics = { ...learned.diagnostics(), noTarget: all.length - review.length };
 
+  // Folder clean-up: empty folders, duplicates and placeholder names. A folder that a
+  // bookmark is being moved into must not be deleted.
+  const targeted = new Set([...moves, ...review].map((m) => m.to.folderId).filter(Boolean));
+  const folderOps = planFolderChanges({ folders, bookmarks, semantic: learned.semantic, embedder, isHolding, targeted });
+  // Suggestions that point at a folder which is about to be merged away (or renamed) are
+  // updated, so what the page says matches what will happen.
+  const mergedInto = new Map(folderOps.filter((op) => op.kind === "merge").map((op) => [op.fromId, folderById.get(op.toId)]));
+  const renamedTo = new Map(folderOps.filter((op) => op.kind === "rename").map((op) => [op.folderId, op.toTitle]));
+  for (const item of [...moves, ...review]) {
+    const keeper = mergedInto.get(item.to.folderId);
+    if (keeper) item.to = toExisting(keeper);
+    const renamed = renamedTo.get(item.to.folderId);
+    if (renamed) {
+      const path = [...item.to.path.slice(0, -1), renamed];
+      item.to = { ...item.to, path, label: path.join("/") };
+    }
+  }
+
   return {
     summary: {
       bookmarks: bookmarks.length,
@@ -365,6 +384,7 @@ export function buildPlan(
     barRootId,
     unclassified,
     duplicates,
+    folderOps,
     emptyFolders: folders.filter((f) => f.empty).map((f) => f.path.join("/")),
   };
 }

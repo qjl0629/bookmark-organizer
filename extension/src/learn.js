@@ -234,6 +234,7 @@ export function learnFromFolders(folders, bookmarks, { embedder = null, threshol
 
   return {
     stats,
+    semantic,
 
     // Scores behind a decision: how much a bookmark resembles each folder. For debugging and tuning.
     explain(bookmark) {

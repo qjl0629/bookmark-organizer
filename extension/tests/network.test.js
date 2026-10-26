@@ -19,6 +19,11 @@ test("only the model loader reads anything over fetch, and nothing else can reac
   assert.ok(!/https?:\/\//.test(sources.find(([name]) => name === "src/model-loader.js")[1].replace(/\/\/.*$/gm, "")), "the loader names no website");
 });
 
+test("the model is loaded once at startup, not again after every change", () => {
+  const page = sources.find(([name]) => name === "organizer.js")[1];
+  assert.equal((page.match(/(?<!function )\bstartModel\(\)/g) ?? []).length, 1);
+});
+
 test("the extension asks for no permissions beyond bookmarks and storage and loads only its own scripts", () => {
   const manifest = JSON.parse(readFileSync(new URL("manifest.json", root), "utf8"));
   assert.deepEqual([...manifest.permissions].sort(), ["bookmarks", "storage"]);

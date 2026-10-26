@@ -109,5 +109,16 @@ export function buildSemantic(folders, bookmarks, embedder) {
     return out.sort((a, b) => b.sem - a.sem);
   }
 
-  return { score, hasVector: (i) => !!vectors[i], platformHosts };
+  // What a whole folder is about: the average meaning of its direct bookmarks, normalized.
+  function profile(folderId) {
+    const sum = sums.get(folderId);
+    const length = sum ? norm(sum) : 0;
+    if (length < 1e-9) return null;
+    const centroid = sum.map((x) => x / length);
+    const indexes = members.get(folderId);
+    const closest = [...indexes].sort((a, b) => dot(vectors[b], centroid) - dot(vectors[a], centroid)).slice(0, 2);
+    return { centroid, name: nameVectors.get(folderId), count: indexes.length, closest };
+  }
+
+  return { score, profile, titleOf: (i) => bookmarks[i].title || hostOf(bookmarks[i].url), hasVector: (i) => !!vectors[i], platformHosts };
 }

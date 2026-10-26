@@ -7,6 +7,7 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 - **Your shortcuts stay put.** Things on the bookmarks bar that you click to *use* (Gmail, ChatGPT, bookmarklets, icon-only bookmarks, short-named home pages) are never moved. You can mark any item "Keep on bar" or "Organize it anyway", and it is remembered.
 - **Understands what a page is about.** A small language model ships inside the extension (about 8 MB, runs on your computer). A bookmark about pasta belongs with your recipes even if no word is shared, and a mortgage article in your Health folder gets flagged. It can be switched off in "How I decide".
 - **Catches misfiled bookmarks.** Learns what each of your folders is about from what is already in it, then flags a bookmark that resembles a different folder much more than its own, and says which bookmarks it resembles. Works for work and internal sites too. "Keep here" is remembered.
+- **Tidies the folders too.** Proposes deleting empty folders, merging duplicates ("Recipe" and "Recipes", or "Cooking" and "Recipes" holding the same things), and renaming folders called "New folder" or "Untitled" to what is inside them (or folding them into the folder they duplicate). Everything is undoable.
 - **You approve everything, in one click if you trust it.** The top button, **Tidy up everything**, selects every suggestion and asks for a final yes. Each section also has **Select all**, **Only the likely ones** and **Clear**, and a floating bar keeps the count and the **Tidy up** button in reach. Nothing changes until you confirm.
 - **One-click undo.** Restores the original positions of the last run, including removed duplicates.
 - **Private by design.** No account, no API key, no network requests. The meaning model is a file inside the extension and is read from there, never downloaded. The only permissions are `bookmarks` and `storage`.
@@ -55,6 +56,17 @@ These are my own test libraries, not a promise about yours.
 
 **Limits.** The model knows everyday topics (food, travel, money, health, common programming terms) but has never heard of newer or very specific products, so it can't know that "Copilot Studio" belongs with Power Platform. In library A it reads "Copilot Studio" as GitHub Copilot and flags it; that is the one wrong flag above, and the test suite keeps it as a known case. Folders with fewer than 4 bookmarks can't be judged. Knowing such relationships needs a large language model, which would mean sending bookmarks to a server, and this project doesn't do that.
 
+**Folders themselves** (`extension/src/folders.js`), in this order. A folder is only ever in one proposal.
+
+1. **Empty folders** are offered for deletion, unless a bookmark is about to be filed into one.
+2. **Same name** (ignoring case, punctuation and a plural "s") are merged into the bigger one. Side by side in the same parent is rated "very likely" and ticked; the same name in different places is "possible" and left unticked.
+3. **Nameless folders** ("New folder", "Untitled", "Stuff"... with 3 or more bookmarks) are folded into a folder that holds clearly the same kind of thing, or else renamed to the best of about 60 everyday names ("Photography", "Finance"...) when one fits clearly better than the rest.
+4. **Different names, same contents.** Merged only when the two names mean about the same *and* the contents are alike, or the contents are nearly identical. These are always rated "possible" and start unticked.
+
+Merging moves everything inside, subfolders included, into the folder that stays, then removes the empty one. A folder is never merged into its own parent or child. Undo recreates the folders and puts every bookmark back in its original position. Suggestions elsewhere that pointed at a merged or renamed folder are updated to match.
+
+As calibrated on three invented libraries: 0 of 18 distinct folders in two ordinary libraries were wrongly merged or renamed; in a deliberately messy one all 5 planted problems were found (1 empty folder, 3 merges, 1 rename). The rename names are a fixed list, not generated, so an unusual topic gets no suggestion rather than a made-up one.
+
 ## Try it without touching your bookmarks
 
 Opening `extension/organizer.html` outside Chrome loads fictional demo data, which is handy for screenshots:
@@ -75,6 +87,7 @@ node --test extension/tests/*.test.js    # Node 22+
 - `extension/src/planner.js`: classification and misfiled detection, pure functions
 - `extension/src/learn.js`: learns what each folder is about (TF-IDF similarity, leave-one-out check, and the meaning-based path)
 - `extension/src/semantic.js`, `embed.js`, `model-loader.js`: meaning scores, the small embedder (WordPiece + averaged vectors), and the same-origin model loader
+- `extension/src/folders.js`: proposals for the folders themselves (delete empty, merge, rename)
 - `extension/src/quickaccess.js`: which bookmarks-bar items count as shortcuts
 - `extension/src/url.js`: URL helpers
 - `extension/src/present.js`: turns reasons into plain sentences and prepares what the interface shows (tested, so the wording stays human)

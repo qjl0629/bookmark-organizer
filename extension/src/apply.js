@@ -5,6 +5,10 @@ export async function applyPlan(api, { moves, removeIds = [] }) {
   const result = { moved: 0, skipped: 0, removed: 0, error: null, undo };
   const newFolders = new Map();
   const getNode = async (id) => (await api.get(id).catch(() => []))[0];
+  // A bookmark that is about to be removed as a duplicate is not worth moving first, and
+  // moving it would make the undo log point at a bookmark that no longer exists.
+  const doomed = new Set(removeIds);
+  moves = moves.filter((move) => !doomed.has(move.id));
 
   try {
     for (const move of moves) {

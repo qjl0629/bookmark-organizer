@@ -89,6 +89,21 @@ test("removing duplicates keeps the earliest and can be undone", async () => {
   assert.deepEqual(await snapshot(api), original);
 });
 
+test("a bookmark both moved and removed as a duplicate is only removed, and undo still restores everything", async () => {
+  const api = sample();
+  const original = await snapshot(api);
+  const plan = buildPlan(await api.getTree());
+  const victim = plan.moves[0];
+  const result = await applyPlan(api, { moves: plan.moves, removeIds: [victim.id] });
+
+  assert.equal(result.error, null);
+  assert.equal(result.removed, 1);
+  assert.equal(result.moved, plan.moves.length - 1);
+  const { errors } = await undoRun(api, result.undo);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(await snapshot(api), original);
+});
+
 test("a failure mid-run returns a partial undo log that still restores everything", async () => {
   const api = sample();
   const original = await snapshot(api);

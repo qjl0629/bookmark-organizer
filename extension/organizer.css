@@ -84,7 +84,7 @@ details.group[open] > summary::before { content: "\25BE"; }
 .badge.demo { color: var(--medium); margin-top: 6px; }
 .badge[hidden] { display: none; }
 
-.tools { display: flex; gap: 8px; margin-bottom: 10px; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .empty { color: var(--muted); }
 #diag p { margin: 0 0 8px; color: var(--muted); }
 .hint { margin: -4px 0 10px; color: var(--muted); font-size: 12px; }

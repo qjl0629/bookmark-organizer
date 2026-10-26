@@ -5,8 +5,8 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 - **Learns from you.** A loose bookmark follows the folder that already holds most bookmarks from the same site, or the folder that mostly holds that kind of site (a folder called "Buy" full of shopping sites counts as your shopping folder). Built-in categories are only a fallback.
 - **Your shortcuts stay put.** Things on the bookmarks bar that you click to *use* (Gmail, ChatGPT, bookmarklets, icon-only bookmarks, short-named home pages) are never moved. You can mark any item "Keep on bar" or "Organize it anyway", and it is remembered.
 - **Catches misfiled bookmarks.** Learns what each of your folders is about from what is already in it, then flags a bookmark that resembles a different folder much more than its own, and says which bookmarks it resembles. Works for work and internal sites too. Suggestions are never pre-selected, and "Keep here" is remembered.
-- **You approve everything.** Review proposed moves grouped by destination, untick anything you disagree with, then apply.
-- **One-click undo.** Restores the original positions of the last run.
+- **You approve everything, in one click if you trust it.** Proposed moves, possibly-misfiled bookmarks and duplicates each have **Select all**, **High & medium only** and **Clear**, and the bottom bar has **Select all suggestions** for everything at once. Nothing changes until you press Apply.
+- **One-click undo.** Restores the original positions of the last run, including removed duplicates.
 - **Private by design.** No account, no API key, no network requests. The only permissions are `bookmarks` and `storage`.
 - **Safe by default.** Bookmarks you already filed are only moved if you tick a suggestion. Duplicates are only removed if you tick them.
 

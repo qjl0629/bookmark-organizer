@@ -26,6 +26,35 @@ function el(tag, attrs = {}, ...children) {
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const copies = (n, prefix = "") => `${n} ${prefix}cop${n === 1 ? "y" : "ies"}`;
 
+// Re-rendering a section after a bulk change must not collapse groups the user has opened.
+const openGroups = (root) =>
+  new Set([...root.querySelectorAll("details")].filter((d) => d.open).map((d) => d.querySelector(".group-name")?.textContent));
+const isOpen = (open, label, fallback) => (open ? open.has(label) : fallback);
+
+// "Select all" / "High & medium only" / "Clear" for one section. `items` need an id, and a
+// confidence when the middle button should be offered.
+const CONFIDENT = new Set(["high", "medium"]);
+function selectionTools(items, selected, refresh) {
+  const choose = (pick) => {
+    for (const item of items) {
+      if (pick(item)) selected.add(item.id);
+      else selected.delete(item.id);
+    }
+    refresh();
+    updateFooter();
+  };
+  const confident = items.filter((item) => CONFIDENT.has(item.confidence)).length;
+  return el(
+    "div",
+    { class: "tools" },
+    el("button", { class: "tool", text: `Select all (${items.length})`, onclick: () => choose(() => true) }),
+    confident > 0 && confident < items.length
+      ? el("button", { class: "tool", text: `High & medium only (${confident})`, onclick: () => choose((item) => CONFIDENT.has(item.confidence)) })
+      : null,
+    el("button", { class: "tool", text: "Clear", onclick: () => choose(() => false) }),
+  );
+}
+
 function setStatus(text, kind = "") {
   const node = $("status");
   node.textContent = text;
@@ -199,7 +228,7 @@ function moveGroup(group, open) {
   );
 }
 
-function renderMoves() {
+function renderMoves(open = null) {
   const { moves } = state.plan;
   if (!moves.length) {
     $("moves").replaceChildren(el("p", { class: "empty", text: "Nothing to move. No loose bookmark matched one of your folders or a known category." }));
@@ -210,50 +239,42 @@ function renderMoves() {
     if (!groups.has(move.to.label)) groups.set(move.to.label, { label: move.to.label, isNew: !move.to.folderId, moves: [] });
     groups.get(move.to.label).moves.push(move);
   }
-  $("moves").replaceChildren(...[...groups.values()].map((group, index) => moveGroup(group, index < 6)));
+  $("moves").replaceChildren(
+    selectionTools(moves, state.moves, () => renderMoves(openGroups($("moves")))),
+    ...[...groups.values()].map((group, index) => moveGroup(group, isOpen(open, group.label, index < 6))),
+  );
 }
 
-function renderDuplicates() {
+function renderDuplicates(open = null) {
   const { duplicates } = state.plan;
   const root = $("dups");
   if (!duplicates.length) {
     root.replaceChildren(el("p", { class: "empty", text: "No duplicates found." }));
     return;
   }
-  const extras = duplicates.flatMap((group) => group.slice(1).map((b) => b.id));
-  const boxes = [];
-  const items = duplicates.map((group) =>
-    el(
+  const extras = duplicates.flatMap((group) => group.slice(1).map((b) => ({ id: b.id })));
+  const items = duplicates.map((group) => {
+    const label = group[0].title || group[0].url;
+    return el(
       "details",
-      { class: "group", open: true },
-      el("summary", {}, el("span", { class: "group-name", text: group[0].title || group[0].url }), el("span", { class: "count", text: copies(group.length) })),
+      { class: "group", open: isOpen(open, label, true) },
+      el("summary", {}, el("span", { class: "group-name", text: label }), el("span", { class: "count", text: copies(group.length) })),
       group.map((bookmark, index) => {
         if (index === 0) {
           return el("div", { class: "row keep" }, el("span", {}), el("span", { class: "title", text: bookmark.path.join("/") }), el("span", { class: "host", text: "earliest, kept" }), el("span", { class: "badge high", text: "keep" }));
         }
         const box = el("input", { type: "checkbox" });
+        box.checked = state.removals.has(bookmark.id);
         box.addEventListener("change", () => {
           if (box.checked) state.removals.add(bookmark.id);
           else state.removals.delete(bookmark.id);
           updateFooter();
         });
-        boxes.push({ box, id: bookmark.id });
         return el("label", { class: "row" }, box, el("span", { class: "title", text: bookmark.path.join("/") }), el("span", { class: "host", text: "extra copy" }), el("span", { class: "badge low", text: "remove" }));
       }),
-    ),
-  );
-  const setAll = (checked) => {
-    boxes.forEach(({ box, id }) => {
-      box.checked = checked;
-      if (checked) state.removals.add(id);
-      else state.removals.delete(id);
-    });
-    updateFooter();
-  };
-  root.replaceChildren(
-    el("div", { class: "tools" }, el("button", { text: `Select all ${copies(extras.length, "extra ")}`, onclick: () => setAll(true) }), el("button", { text: "Clear", onclick: () => setAll(false) })),
-    ...items,
-  );
+    );
+  });
+  root.replaceChildren(selectionTools(extras, state.removals, () => renderDuplicates(openGroups($("dups")))), ...items);
 }
 
 function renderUnclassified() {
@@ -275,25 +296,24 @@ function renderUnclassified() {
   );
 }
 
-function renderReview() {
+function renderReview(open = null) {
   const { review } = state.plan;
   const root = $("review");
   if (!review.length) {
     root.replaceChildren(el("p", { class: "empty", text: "Nothing looks out of place." }));
     return;
   }
+  const title = "Bookmarks that may be in the wrong folder";
   root.replaceChildren(
+    selectionTools(review, state.review, () => renderReview(openGroups($("review")))),
     el(
       "details",
-      { class: "group", open: true },
-      el("summary", {}, el("span", { class: "group-name", text: "Bookmarks that may be in the wrong folder" }), el("span", { class: "count", text: plural(review.length, "bookmark") })),
+      { class: "group", open: isOpen(open, title, true) },
+      el("summary", {}, el("span", { class: "group-name", text: title }), el("span", { class: "count", text: plural(review.length, "bookmark") })),
       review.map((item) => {
         const keep = el("button", { class: "link", text: "Keep here", onclick: (event) => { event.preventDefault(); keepHere(item); } });
         const reason = el("span", { class: "reason" }, item.reason, keep);
-        const label = el("span", { class: "host", text: item.to ? `${item.fromPath.join("/")}  →  ${item.to.label}` : item.fromPath.join("/") });
-        if (!item.to) {
-          return el("div", { class: "row" }, el("span", {}), el("span", { class: "title", text: item.title || item.url, title: item.url }), label, el("span", { class: "badge low", text: "no target" }), reason);
-        }
+        const label = el("span", { class: "host", text: `${item.fromPath.join("/")}  →  ${item.to.label}` });
         const box = el("input", { type: "checkbox" });
         box.checked = state.review.has(item.id);
         box.addEventListener("change", () => {
@@ -341,6 +361,18 @@ function updateFooter() {
   $("applyBtn").disabled = state.busy || moves + removals === 0;
 }
 
+// One click for everything in every section. Undo restores it all.
+function selectEverything(on) {
+  const extras = state.plan.duplicates.flatMap((group) => group.slice(1).map((b) => b.id));
+  state.moves = new Set(on ? state.plan.moves.map((m) => m.id) : []);
+  state.review = new Set(on ? state.plan.review.map((r) => r.id) : []);
+  state.removals = new Set(on ? extras : []);
+  renderMoves(openGroups($("moves")));
+  renderReview(openGroups($("review")));
+  renderDuplicates(openGroups($("dups")));
+  updateFooter();
+}
+
 async function renderUndo() {
   const { lastRun } = await chrome.storage.local.get("lastRun");
   const banner = $("undoBanner");
@@ -381,4 +413,6 @@ async function undo() {
 }
 
 $("applyBtn").addEventListener("click", apply);
+$("selectAllBtn").addEventListener("click", () => selectEverything(true));
+$("clearAllBtn").addEventListener("click", () => selectEverything(false));
 await load();

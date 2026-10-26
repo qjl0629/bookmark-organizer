@@ -271,6 +271,8 @@ main { display: grid; gap: 20px; }
 .row .route { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
 .meta { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; }
 .meta .keep { margin-left: auto; }
+.evidence { font-size: 13px; color: var(--text-2); }
+.note-actions { padding: 4px 24px 20px; }
 .why-text {
   grid-column: 2 / -1; margin: 0; padding: 10px 14px; border-radius: 12px; font-size: 13.5px; line-height: 1.45;
   color: var(--text-2); background: var(--surface-2);

@@ -1,6 +1,7 @@
 // Builds a reviewable plan from chrome.bookmarks.getTree() output. Pure functions only.
 import { categorize, categorizeHost } from "./categories.js";
 import { planFolderChanges } from "./folders.js";
+import { planOrdering } from "./order.js";
 import { learnFromFolders } from "./learn.js";
 import { quickAccessReason } from "./quickaccess.js";
 import { baseDomain, hostOf, normalizeUrl } from "./url.js";
@@ -15,7 +16,7 @@ export function flatten(tree) {
   const folders = [];
   const bookmarks = [];
   const walk = (node, path) => {
-    for (const child of node.children ?? []) {
+    (node.children ?? []).forEach((child, position) => {
       if (child.url !== undefined) {
         bookmarks.push({
           id: child.id,
@@ -23,19 +24,22 @@ export function flatten(tree) {
           url: child.url,
           parentId: node.id,
           dateAdded: child.dateAdded ?? 0,
+          lastUsed: child.dateLastUsed ?? 0,
+          position,
           path,
         });
       } else {
         const childPath = [...path, child.title];
-        folders.push({ id: child.id, title: child.title, path: childPath, parentId: node.id, empty: !child.children?.length });
+        folders.push({ id: child.id, title: child.title, path: childPath, parentId: node.id, position, empty: !child.children?.length });
         walk(child, childPath);
       }
-    }
+    });
   };
   for (const root of top.children ?? []) walk(root, [root.title]);
   const roots = top.children ?? [];
   const bar = roots.find((r) => r.folderType === "bookmarks-bar") ?? roots.find((r) => r.id === "1") ?? roots[0];
-  return { roots, folders, bookmarks, barRootId: bar?.id ?? null };
+  const other = roots.find((r) => r.folderType === "other") ?? roots.find((r) => r.id === "2");
+  return { roots, folders, bookmarks, barRootId: bar?.id ?? null, otherRootId: other?.id ?? null };
 }
 
 export function findDuplicates(bookmarks) {
@@ -187,9 +191,9 @@ export function findMisplaced(folders, bookmarks, dismissed = new Set()) {
 
 export function buildPlan(
   tree,
-  { minNewFolderSize = 2, pinned = new Set(), organizeAnyway = new Set(), dismissed = new Set(), embedder = null, thresholds } = {},
+  { minNewFolderSize = 2, pinned = new Set(), organizeAnyway = new Set(), dismissed = new Set(), embedder = null, thresholds, visits = null, now = Date.now() } = {},
 ) {
-  const { roots, folders, bookmarks, barRootId } = flatten(tree);
+  const { roots, folders, bookmarks, barRootId, otherRootId } = flatten(tree);
   const rootTitle = new Map(roots.map((root) => [root.id, root.title]));
   const loose = bookmarks.filter((b) => b.path.length === 1);
   const filed = bookmarks.filter((b) => b.path.length > 1);
@@ -366,6 +370,13 @@ export function buildPlan(
     }
   }
 
+  // Order and archive: based on what is actually used. Bookmarks that are being moved, or
+  // removed as duplicates, are left out, and so are folders that are about to be merged away.
+  const settled = new Set([...moves, ...review].map((m) => m.id));
+  for (const group of duplicates) for (const b of group.slice(1)) settled.add(b.id);
+  const ordering = planOrdering({ folders, bookmarks, roots, barRootId, otherRootId, visits, now, skip: settled, dismissed: (b) => dismissed.has(dismissKey(b)) });
+  const orderOps = ordering.order.filter((op) => !mergedInto.has(op.parentId) && !(op.kind === "promoteFolder" && mergedInto.has(op.folderId)));
+
   return {
     summary: {
       bookmarks: bookmarks.length,
@@ -385,6 +396,9 @@ export function buildPlan(
     unclassified,
     duplicates,
     folderOps,
+    orderOps,
+    archive: ordering.archive,
+    usage: ordering.usage,
     emptyFolders: folders.filter((f) => f.empty).map((f) => f.path.join("/")),
   };
 }

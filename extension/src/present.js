@@ -36,6 +36,14 @@ const quoteList = (titles) => {
   return list.length === 1 ? list[0] : `${list[0]} and ${list[1]}`;
 };
 
+// "3 months", "over a year", "2 years": how long ago, roughly.
+export function span(days) {
+  if (days < 60) return `${days} day${days === 1 ? "" : "s"}`;
+  if (days < 365) return `${Math.round(days / 30)} months`;
+  const years = Math.floor(days / 365);
+  return years === 1 ? "over a year" : `${years} years`;
+}
+
 export function describeWhy(why) {
   if (!why) return "";
   switch (why.type) {
@@ -77,6 +85,13 @@ export function describeWhy(why) {
       const seen = quoteList(why.titles);
       return seen ? `${quote(why.from)} doesn't say what's in it. It holds ${seen}, so ${quote(why.to)} would tell you at a glance.` : `${quote(why.from)} doesn't say what's in it. ${quote(why.to)} fits what it holds.`;
     }
+    case "usedOften":
+      if (why.visits != null) return `You opened this ${why.visits} times in the last 3 months.`;
+      return why.days === 0 ? "You opened this today." : `You opened this ${why.days === 1 ? "yesterday" : `${why.days} days ago`}.`;
+    case "usedFolder":
+      return why.visits != null ? `You visited bookmarks in here ${why.visits} times in the last 3 months.` : `You've opened ${why.count} bookmark${why.count === 1 ? "" : "s"} in here recently.`;
+    case "unused":
+      return why.lastOpened != null ? `You last opened this ${span(why.lastOpened)} ago.` : `Saved ${span(why.saved)} ago, and I can't see that you've opened it since.`;
     case "otherKind": {
       const base = `${why.host} looks like ${kindOne(why.category)}, but most of ${quote(why.ownFolder)} is ${kindPhrase(why.ownKind)}.`;
       return why.folder ? `${base} ${quote(why.folder)} is a better home.` : base;

@@ -14,6 +14,7 @@ export function createMemoryBookmarks(roots) {
       dateAdded: spec.dateAdded ?? Date.now(),
       parentId: parent.id,
     };
+    if (spec.dateLastUsed !== undefined) node.dateLastUsed = spec.dateLastUsed;
     if (spec.url === undefined) node.children = [];
     else node.url = spec.url;
     byId.set(node.id, node);
@@ -32,8 +33,10 @@ export function createMemoryBookmarks(roots) {
       title: node.title,
       dateAdded: node.dateAdded,
     };
-    if (node.url !== undefined) copy.url = node.url;
-    else if (deep) copy.children = node.children.map((child) => view(child, true));
+    if (node.url !== undefined) {
+      copy.url = node.url;
+      if (node.dateLastUsed !== undefined) copy.dateLastUsed = node.dateLastUsed;
+    } else if (deep) copy.children = node.children.map((child) => view(child, true));
     return copy;
   };
   const need = (id) => {
@@ -67,8 +70,12 @@ export function createMemoryBookmarks(roots) {
       const node = need(id);
       const oldParent = byId.get(node.parentId);
       const target = parentId ? need(parentId) : oldParent;
-      oldParent.children.splice(oldParent.children.indexOf(node), 1);
-      target.children.splice(index ?? target.children.length, 0, node);
+      const oldIndex = oldParent.children.indexOf(node);
+      let at = index ?? target.children.length;
+      oldParent.children.splice(oldIndex, 1);
+      // Like Chrome: inside one folder, `index` is a place in the list as it was before the move.
+      if (oldParent === target && at > oldIndex) at -= 1;
+      target.children.splice(at, 0, node);
       node.parentId = target.id;
       return view(node, false);
     },

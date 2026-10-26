@@ -24,9 +24,10 @@ test("the model is loaded once at startup, not again after every change", () => 
   assert.equal((page.match(/(?<!function )\bstartModel\(\)/g) ?? []).length, 1);
 });
 
-test("the extension asks for no permissions beyond bookmarks and storage and loads only its own scripts", () => {
+test("the extension asks for no permissions beyond bookmarks and storage; history is optional and loads only its own scripts", () => {
   const manifest = JSON.parse(readFileSync(new URL("manifest.json", root), "utf8"));
   assert.deepEqual([...manifest.permissions].sort(), ["bookmarks", "storage"]);
+  assert.deepEqual(manifest.optional_permissions, ["history"]);
   assert.equal(manifest.host_permissions, undefined);
   assert.match(manifest.content_security_policy.extension_pages, /script-src 'self'/);
 });

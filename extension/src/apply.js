@@ -1,8 +1,8 @@
 // Applies and undoes plans through an injected bookmarks API (chrome.bookmarks or a test double).
 
-export async function applyPlan(api, { moves = [], removeIds = [], folderOps = [] }) {
-  const undo = { time: Date.now(), created: [], moved: [], removed: [], foldersRemoved: [], renamed: [], carried: 0, merged: 0, deleted: 0 };
-  const result = { moved: 0, skipped: 0, removed: 0, merged: 0, deleted: 0, renamed: 0, error: null, undo };
+export async function applyPlan(api, { moves = [], removeIds = [], folderOps = [], orderOps = [] }) {
+  const undo = { time: Date.now(), created: [], moved: [], removed: [], foldersRemoved: [], renamed: [], carried: 0, merged: 0, deleted: 0, reordered: 0 };
+  const result = { moved: 0, skipped: 0, removed: 0, merged: 0, deleted: 0, renamed: 0, reordered: 0, error: null, undo };
   const newFolders = new Map();
   const getNode = async (id) => (await api.get(id).catch(() => []))[0];
   // A bookmark that is about to be removed as a duplicate is not worth moving first, and
@@ -42,6 +42,41 @@ export async function applyPlan(api, { moves = [], removeIds = [], folderOps = [
       undo.removed.push({ title: node.title, url: node.url, parentId: node.parentId, index: node.index });
       await api.remove(id);
       result.removed++;
+    }
+
+    // Put the most used bookmarks and folders at the top of their folder. Each is moved to the
+    // top in reverse order of preference, so the best ends up first.
+    const byParent = new Map();
+    for (const op of orderOps) {
+      if (!byParent.has(op.parentId)) byParent.set(op.parentId, []);
+      byParent.get(op.parentId).push(op);
+    }
+    for (const [parentId, ops] of byParent) {
+      for (const op of ops.filter((o) => o.kind === "promote").sort((a, b) => b.rank - a.rank)) {
+        const node = await getNode(op.bookmarkId);
+        if (!node || node.parentId !== parentId) {
+          result.skipped++;
+          continue;
+        }
+        if (node.index === 0) continue;
+        undo.moved.push({ id: node.id, parentId, index: node.index });
+        await api.move(node.id, { parentId, index: 0 });
+        undo.reordered++;
+        result.reordered++;
+      }
+      for (const op of ops.filter((o) => o.kind === "promoteFolder").sort((a, b) => b.rank - a.rank)) {
+        const node = await getNode(op.folderId);
+        const first = (await api.getChildren(parentId)).find((child) => child.url === undefined);
+        if (!node || node.parentId !== parentId || !first) {
+          result.skipped++;
+          continue;
+        }
+        if (node.index <= first.index) continue;
+        undo.moved.push({ id: node.id, parentId, index: node.index });
+        await api.move(node.id, { parentId, index: first.index });
+        undo.reordered++;
+        result.reordered++;
+      }
     }
 
     // Folder changes come last, so bookmarks headed elsewhere have already left a folder
@@ -113,7 +148,14 @@ export async function undoRun(api, undo) {
     await attempt(() => api.create({ parentId: live(item.parentId), index: item.index, title: item.title, url: item.url }));
   }
   for (const item of [...undo.moved].reverse()) {
-    await attempt(() => api.move(item.id, { parentId: live(item.parentId), index: item.index }));
+    await attempt(async () => {
+      const parentId = live(item.parentId);
+      const [node] = await api.get(item.id);
+      // Inside one folder Chrome reads the index as a place in the list before the move, so
+      // going down the list needs one more.
+      const index = node.parentId === parentId && node.index < item.index ? item.index + 1 : item.index;
+      await api.move(item.id, { parentId, index });
+    });
   }
   for (const id of [...undo.created].reverse()) {
     await attempt(() => api.remove(id)); // only succeeds when the folder is empty again

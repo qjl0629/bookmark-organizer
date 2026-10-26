@@ -1,7 +1,8 @@
 import { applyPlan, undoRun } from "./src/apply.js";
 import { loadEmbedder } from "./src/model-loader.js";
-import { buildPlan, dismissKey, hostOf, normalizeUrl } from "./src/planner.js";
+import { buildPlan, dismissKey, flatten, hostOf, normalizeUrl } from "./src/planner.js";
 import { CONFIDENCE, avatarHue, avatarLetter, describeWhy, displayUrl, folderChip, isOpenable, shortcutWhy } from "./src/present.js";
+import { loadVisits } from "./src/usage.js";
 
 // Outside Chrome (previews, screenshots) fall back to fictional demo data.
 const isDemo = !globalThis.chrome?.bookmarks;
@@ -16,13 +17,18 @@ const state = {
   removals: new Set(),
   folderOps: new Set(),
   seenFolderOps: new Set(),
+  orderOps: new Set(),
+  seenOrderOps: new Set(),
+  archive: new Set(),
   seenMoves: new Set(),
-  expanded: { moves: false, review: false, dups: false, folders: false },
+  expanded: { moves: false, review: false, dups: false, folders: false, order: false, archive: false },
   justApplied: false,
   busy: false,
   // "loading" until the bundled model is read, then "ready"; "failed" means word matching only.
   model: { status: "loading", embedder: null, seconds: 0 },
   smartMatching: true,
+  // Browsing history is optional: "available" when Chrome can ask for it, "granted" once allowed.
+  history: { available: !!globalThis.chrome?.permissions?.request, granted: false, visits: null },
 };
 const PREVIEW_ROWS = 6;
 
@@ -57,6 +63,8 @@ const ICONS = {
   chevron: '<path d="M6 9l6 6 6-6"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
   sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  top: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  archive: '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>',
   inbox: '<path d="M4 13l2-8h12l2 8M4 13v6h16v-6M4 13h5l1 2h4l1-2h5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
 };
@@ -119,7 +127,7 @@ async function load() {
   state.lastRun = lastRun ?? null;
   const { smartMatching = true } = await chrome.storage.local.get("smartMatching");
   state.smartMatching = smartMatching;
-  state.plan = buildPlan(await chrome.bookmarks.getTree(), { ...settings, embedder: smartMatching ? state.model.embedder : null });
+  state.plan = buildPlan(await chrome.bookmarks.getTree(), { ...settings, embedder: smartMatching ? state.model.embedder : null, visits: state.history.visits });
 
   // Keep the user's ticks across reloads; moves that appear for the first time start selected.
   const previous = state.moves;
@@ -135,6 +143,13 @@ async function load() {
     state.plan.folderOps.filter((op) => (!state.seenFolderOps.has(op.id) && op.confidence === "high") || previousOps.has(op.id)).map((op) => op.id),
   );
   state.seenFolderOps = new Set(state.plan.folderOps.map((op) => op.id));
+  // The bookmarks used most start ticked when I'm sure; Archive always waits for the user.
+  const previousOrder = state.orderOps;
+  state.orderOps = new Set(
+    state.plan.orderOps.filter((op) => (!state.seenOrderOps.has(op.id) && op.confidence === "high") || previousOrder.has(op.id)).map((op) => op.id),
+  );
+  state.seenOrderOps = new Set(state.plan.orderOps.map((op) => op.id));
+  state.archive = new Set([...state.archive].filter((id) => state.plan.archive.some((a) => a.id === id)));
   render();
 }
 
@@ -142,14 +157,17 @@ const duplicateRows = () =>
   state.plan.duplicates.flatMap((group) =>
     group.slice(1).map((b) => ({ id: b.id, title: b.title, url: b.url, path: b.path, keepPath: group[0].path })),
   );
-const changeCount = () => state.plan.moves.length + state.plan.review.length + duplicateRows().length + state.plan.folderOps.length;
+const changeCount = () =>
+  state.plan.moves.length + state.plan.review.length + duplicateRows().length + state.plan.folderOps.length + state.plan.orderOps.length + state.plan.archive.length;
 const selectedFolderOps = () => state.plan.folderOps.filter((op) => state.folderOps.has(op.id));
+const selectedOrderOps = () => state.plan.orderOps.filter((op) => state.orderOps.has(op.id));
 
 // Moves the user has ticked. A bookmark that is also ticked for removal is only removed.
 const selectedMoves = () =>
   [
     ...state.plan.moves.filter((m) => state.moves.has(m.id)),
     ...state.plan.review.filter((r) => state.review.has(r.id)),
+    ...state.plan.archive.filter((a) => state.archive.has(a.id)),
   ].filter((m) => !state.removals.has(m.id));
 
 // ---------------------------------------------------------------- building blocks
@@ -184,8 +202,21 @@ function folderChipEl(path, variant, { isNew = false } = {}) {
 }
 
 const leg = (label, node) => el("div", { class: "leg" }, el("span", { class: "leg-label", text: label }), node);
-const route = (fromPath, toNode, [fromLabel, toLabel] = ["Now in", "Move to"]) =>
-  el("div", { class: "route" }, leg(fromLabel, folderChipEl(fromPath, "from")), icon("arrow", 18), leg(toLabel, toNode));
+const route = (from, toNode, [fromLabel, toLabel] = ["Now in", "Move to"]) =>
+  el("div", { class: "route" }, leg(fromLabel, Array.isArray(from) ? folderChipEl(from, "from") : from), icon("arrow", 18), leg(toLabel, toNode));
+
+function placeChip(name, hint, variant, iconName = "folder") {
+  return el("span", { class: `chip ${variant}` }, icon(iconName, 15), el("span", { class: "name", text: name }), hint ? el("span", { class: "hint", text: hint }) : null);
+}
+
+function folderCell(title, sub) {
+  return el(
+    "div",
+    { class: "site" },
+    el("span", { class: "avatar", style: "--h:215", "aria-hidden": "true" }, icon("folder", 18)),
+    el("div", { class: "site-text" }, el("div", { class: "title", text: title }), el("div", { class: "url", text: sub })),
+  );
+}
 
 // The reason is there when you want it, not in the way when you don't.
 function explain(text) {
@@ -223,9 +254,9 @@ function checkbox(checked, label, onChange) {
   return el("label", { class: "check" }, input, el("span", { class: "box" }, icon("check", 14, 3)));
 }
 
-function planRow(item, selected, { toNode, why, extra = null, showSure = true, labels }) {
+function planRow(item, selected, { toNode, why, extra = null, showSure = true, labels, inline = false, fromNode = null, cell = null }) {
   const row = el("li", { class: `row${selected.has(item.id) ? " is-selected" : ""}` });
-  const { button, panel } = explain(why);
+  const { button, panel } = inline ? { button: el("span", { class: "evidence", text: why }), panel: null } : explain(why);
   row.append(
     checkbox(selected.has(item.id), `Select ${item.title || item.url}`, (on) => {
       if (on) selected.add(item.id);
@@ -233,10 +264,10 @@ function planRow(item, selected, { toNode, why, extra = null, showSure = true, l
       row.classList.toggle("is-selected", on);
       updateBar();
     }),
-    siteCell(item),
-    route(item.fromPath ?? item.path, toNode, labels),
+    cell ?? siteCell(item),
+    route(fromNode ?? item.fromPath ?? item.path, toNode, labels),
     el("div", { class: "meta" }, showSure ? sure(item.confidence) : null, button, extra),
-    panel,
+    ...(panel ? [panel] : []),
   );
   return row;
 }
@@ -352,6 +383,68 @@ function reviewCard() {
         extra: el("button", { class: "textbtn keep", text: "Keep it here", onclick: () => keepHere(item) }),
       }),
   });
+}
+
+function orderCard() {
+  const items = state.plan.orderOps;
+  if (!items.length) return null;
+  return planCard({
+    id: "sec-order",
+    kind: "order",
+    iconName: "top",
+    title: "Put what you use most at the top",
+    blurb: "The bookmarks and folders you open most, moved to the top of where they are. Everything else keeps its order, with the newest at the bottom.",
+    items,
+    selected: state.orderOps,
+    row: (item) =>
+      item.kind === "promote"
+        ? planRow(item, state.orderOps, {
+            fromNode: placeChip(item.path[item.path.length - 1], `#${item.position} of ${item.size}`, "from"),
+            toNode: placeChip("Top of the folder", null, "to", "top"),
+            labels: ["Now", "Move to"],
+            why: describeWhy(item.why),
+            inline: true,
+          })
+        : planRow(item, state.orderOps, {
+            cell: folderCell(item.title, "Folder"),
+            fromNode: placeChip(item.title, `#${item.position} of ${item.size} folders`, "from"),
+            toNode: placeChip("First of its folders", null, "to", "top"),
+            labels: ["Now", "Move to"],
+            why: describeWhy(item.why),
+            inline: true,
+          }),
+  });
+}
+
+function archiveCard() {
+  const items = state.plan.archive;
+  if (!items.length) return null;
+  return planCard({
+    id: "sec-archive",
+    kind: "archive",
+    iconName: "archive",
+    title: "Rarely used: tuck away in Archive",
+    blurb: "Saved over a year ago and not opened since, as far as Chrome can tell. They'd go in an Archive folder under Other bookmarks, off your bar. Nothing is deleted, and none of these are ticked for you.",
+    items,
+    selected: state.archive,
+    row: (item) =>
+      planRow(item, state.archive, {
+        toNode: folderChipEl(item.to.path, "to", { isNew: !!item.to.newFolder }),
+        why: describeWhy(item.why),
+        inline: true,
+        extra: el("button", { class: "textbtn keep", text: "Keep it here", onclick: () => keepHere(item) }),
+      }),
+  });
+}
+
+function historyCard() {
+  const h = state.history;
+  if (!h.available || !h.checked || h.granted) return null;
+  return quietCard(
+    { id: "sec-history", iconName: "sparkle", title: "Find what you use most", blurb: "Chrome only knows when a bookmark was last opened. Allow history and I can count visits too.", open: true },
+    el("p", { class: "note", text: "I'd count how often you visited each bookmarked page in the last 3 months. It happens on this computer, nothing is stored or sent anywhere, and you can turn it off any time." }),
+    el("div", { class: "note-actions" }, el("button", { class: "btn btn-primary btn-small", text: "Allow and use my history", onclick: allowHistory })),
+  );
 }
 
 function foldersCard() {
@@ -478,6 +571,34 @@ async function startModel() {
   else render();
 }
 
+async function startHistory() {
+  const h = state.history;
+  if (!h.available) return;
+  h.granted = !!chrome.history && (await chrome.permissions.contains({ permissions: ["history"] }));
+  h.checked = true;
+  if (!h.granted) {
+    render();
+    return;
+  }
+  const { bookmarks } = flatten(await chrome.bookmarks.getTree());
+  h.visits = await loadVisits(chrome.history, bookmarks.map((b) => b.url));
+  await load();
+}
+
+// Called straight from a click, because Chrome only shows its permission prompt for a user action.
+async function allowHistory() {
+  const ok = await chrome.permissions.request({ permissions: ["history"] });
+  if (!ok) return toast("No problem. I won't look at your history.");
+  toast("Counting your visits...");
+  await startHistory();
+}
+
+async function stopHistory() {
+  await chrome.permissions.remove({ permissions: ["history"] });
+  Object.assign(state.history, { granted: false, visits: null });
+  await load();
+}
+
 async function setSmartMatching(on) {
   await chrome.storage.local.set({ smartMatching: on });
   await load();
@@ -495,6 +616,18 @@ function smartMatchingFact() {
       : "Smart matching is off, so I only compare websites and words. ",
     el("button", { class: "textbtn", text: state.smartMatching ? "Turn it off" : "Turn it on", onclick: () => setSmartMatching(!state.smartMatching) }),
   );
+}
+
+function usageFacts() {
+  const u = state.plan.usage;
+  const facts = [
+    el("li", { text: `Chrome knows when ${u.withDate} of your ${u.total} bookmarks were last opened${state.history.visits ? ", and I count your visits from the last 3 months" : ""}. I use that to find what you use most.` }),
+  ];
+  if (!u.archiveReady) facts.push(el("li", { text: "There aren't enough last-opened dates yet to tell what's unused, so I won't suggest an Archive." }));
+  if (state.history.granted) {
+    facts.push(el("li", {}, "I'm using your browsing history, on this computer only. ", el("button", { class: "textbtn", text: "Stop using it", onclick: stopHistory })));
+  }
+  return facts;
 }
 
 function aboutCard() {
@@ -515,17 +648,18 @@ function aboutCard() {
   }
   return quietCard(
     { id: "sec-about", iconName: "info", title: "How I decide", blurb: "A quick look at how these suggestions are made." },
-    el("ul", { class: "facts" }, [...facts.slice(0, 2).map((text) => el("li", { text })), smartMatchingFact(), ...facts.slice(2).map((text) => el("li", { text }))]),
+    el("ul", { class: "facts" }, [...facts.slice(0, 2).map((text) => el("li", { text })), smartMatchingFact(), ...usageFacts(), ...facts.slice(2).map((text) => el("li", { text }))]),
   );
 }
 
 function bannerNode() {
   const run = state.lastRun;
   if (!run) return null;
-  const moved = run.moved.length - (run.carried ?? 0);
+  const moved = run.moved.length - (run.carried ?? 0) - (run.reordered ?? 0);
   const removed = run.removed.length;
   const parts = [
     moved ? plural(moved, "bookmark moved", "bookmarks moved") : null,
+    run.reordered ? plural(run.reordered, "item moved to the top", "items moved to the top") : null,
     run.merged ? plural(run.merged, "folder merged", "folders merged") : null,
     run.renamed?.length ? plural(run.renamed.length, "folder renamed", "folders renamed") : null,
     run.deleted ? plural(run.deleted, "empty folder deleted", "empty folders deleted") : null,
@@ -588,8 +722,8 @@ function heroNode() {
 
 // ---------------------------------------------------------------- rendering
 
-const CARD_BUILDERS = { moves: movesCard, review: reviewCard, folders: foldersCard, dups: dupsCard };
-const CARD_IDS = { moves: "sec-moves", review: "sec-review", folders: "sec-folders", dups: "sec-dups" };
+const CARD_BUILDERS = { moves: movesCard, review: reviewCard, order: orderCard, folders: foldersCard, archive: archiveCard, dups: dupsCard };
+const CARD_IDS = { moves: "sec-moves", review: "sec-review", order: "sec-order", folders: "sec-folders", archive: "sec-archive", dups: "sec-dups" };
 
 // Re-render one card after a bulk change so the page doesn't jump or collapse other cards.
 function refreshCard(kind) {
@@ -601,7 +735,7 @@ function refreshCard(kind) {
 function render() {
   $("demoBadge").hidden = !isDemo;
   $("app").replaceChildren(
-    ...[bannerNode(), heroNode(), movesCard(), reviewCard(), foldersCard(), dupsCard(), shortcutsCard(), unsureCard(), aboutCard()].filter(Boolean),
+    ...[bannerNode(), heroNode(), historyCard(), movesCard(), reviewCard(), orderCard(), foldersCard(), dupsCard(), archiveCard(), shortcutsCard(), unsureCard(), aboutCard()].filter(Boolean),
   );
   updateBar();
 }
@@ -612,9 +746,11 @@ function updateBar() {
   const moves = selectedMoves().length;
   const removals = state.removals.size;
   const folders = selectedFolderOps().length;
-  const total = moves + removals + folders;
+  const ordered = selectedOrderOps().length;
+  const total = moves + removals + folders + ordered;
   const detail = [
     moves ? `Moving ${plural(moves, "bookmark")}` : null,
+    ordered ? `${moves ? "reordering" : "Reordering"} ${plural(ordered, "item")}` : null,
     folders ? `${moves ? "changing" : "Changing"} ${plural(folders, "folder")}` : null,
     removals ? `${moves || folders ? "removing" : "Removing"} ${plural(removals, "duplicate")}` : null,
   ]
@@ -633,6 +769,9 @@ function selectEverything(on) {
   state.moves = new Set(on ? state.plan.moves.map((m) => m.id) : []);
   state.review = new Set(on ? state.plan.review.map((r) => r.id) : []);
   state.folderOps = new Set(on ? state.plan.folderOps.map((op) => op.id) : []);
+  state.orderOps = new Set(on ? state.plan.orderOps.map((op) => op.id) : []);
+  // Archive is the one thing "select everything" leaves for the user to tick on purpose.
+  if (!on) state.archive = new Set();
   state.removals = new Set(on ? duplicateRows().map((d) => d.id) : []);
   for (const kind of Object.keys(CARD_BUILDERS)) refreshCard(kind);
   updateBar();
@@ -643,15 +782,18 @@ function tidyEverything() {
   return apply();
 }
 
-function confirmTidy(moves, removeIds, folderOps) {
+function confirmTidy(moves, removeIds, folderOps, orderOps) {
   const newFolders = new Set(moves.filter((m) => m.to.newFolder).map((m) => m.to.path.join("›")));
   const lines = [];
-  const filed = moves.filter((m) => !state.plan.review.includes(m));
-  const misplaced = moves.length - filed.length;
+  const archived = moves.filter((m) => state.plan.archive.includes(m));
+  const filed = moves.filter((m) => !state.plan.review.includes(m) && !archived.includes(m));
+  const misplaced = moves.length - filed.length - archived.length;
   const count = (kind) => folderOps.filter((op) => op.kind === kind).length;
   if (filed.length) lines.push(`Move ${plural(filed.length, "bookmark")} into folders`);
   if (misplaced) lines.push(`Move ${plural(misplaced, "bookmark")} to a better folder`);
   if (newFolders.size) lines.push(`Create ${plural(newFolders.size, "new folder")}`);
+  if (orderOps.length) lines.push(`Move ${plural(orderOps.length, "of your most-used bookmark or folder", "of your most-used bookmarks and folders")} to the top`);
+  if (archived.length) lines.push(`Move ${plural(archived.length, "rarely used bookmark")} to Archive`);
   if (count("merge")) lines.push(`Merge ${plural(count("merge"), "folder")} into another (everything inside moves with it)`);
   if (count("rename")) lines.push(`Rename ${plural(count("rename"), "folder")}`);
   if (count("delete")) lines.push(`Delete ${plural(count("delete"), "empty folder")}`);
@@ -671,13 +813,14 @@ async function apply() {
   const moves = selectedMoves();
   const removeIds = [...state.removals];
   const folderOps = selectedFolderOps();
-  if (!moves.length && !removeIds.length && !folderOps.length) return;
-  if (!(await confirmTidy(moves, removeIds, folderOps))) return;
+  const orderOps = selectedOrderOps();
+  if (!moves.length && !removeIds.length && !folderOps.length && !orderOps.length) return;
+  if (!(await confirmTidy(moves, removeIds, folderOps, orderOps))) return;
 
   state.busy = true;
   updateBar();
-  const result = await applyPlan(chrome.bookmarks, { moves, removeIds, folderOps });
-  const done = result.moved + result.removed + result.merged + result.deleted + result.renamed;
+  const result = await applyPlan(chrome.bookmarks, { moves, removeIds, folderOps, orderOps });
+  const done = result.moved + result.removed + result.merged + result.deleted + result.renamed + result.reordered;
   if (done > 0) await chrome.storage.local.set({ lastRun: result.undo });
   state.busy = false;
   state.justApplied = done > 0;
@@ -717,3 +860,4 @@ confirmDialog.addEventListener("click", (event) => {
 });
 await load();
 startModel();
+startHistory();

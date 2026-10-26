@@ -8,6 +8,9 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 - **Understands what a page is about.** A small language model ships inside the extension (about 8 MB, runs on your computer). A bookmark about pasta belongs with your recipes even if no word is shared, and a mortgage article in your Health folder gets flagged. It can be switched off in "How I decide".
 - **Catches misfiled bookmarks.** Learns what each of your folders is about from what is already in it, then flags a bookmark that resembles a different folder much more than its own, and says which bookmarks it resembles. Works for work and internal sites too. "Keep here" is remembered.
 - **Tidies the folders too.** Proposes deleting empty folders, merging duplicates ("Recipe" and "Recipes", or "Cooking" and "Recipes" holding the same things), and renaming folders called "New folder" or "Untitled" to what is inside them (or folding them into the folder they duplicate). Everything is undoable.
+- **Puts what you use most at the top.** In each folder with 6 or more bookmarks, the few you open most move to the top, and the busiest folders move up among their sibling folders. Everything else keeps its order, so the newest stay at the bottom as Chrome puts them. Shortcuts on the bar never move.
+- **Tucks away what you don't use.** Bookmarks saved over a year ago and not opened since are offered for an Archive folder under Other bookmarks (off the bar, nothing deleted). Never ticked automatically, not even by "Tidy up everything".
+- **Optional history.** Chrome only says when a bookmark was last opened. If you allow the optional `history` permission, visits in the last 3 months are counted too, on your computer only. It is asked for with a button, and can be switched off again.
 - **You approve everything, in one click if you trust it.** The top button, **Tidy up everything**, selects every suggestion and asks for a final yes. Each section also has **Select all**, **Only the likely ones** and **Clear**, and a floating bar keeps the count and the **Tidy up** button in reach. Nothing changes until you confirm.
 - **One-click undo.** Restores the original positions of the last run, including removed duplicates.
 - **Private by design.** No account, no API key, no network requests. The meaning model is a file inside the extension and is read from there, never downloaded. The only permissions are `bookmarks` and `storage`.
@@ -67,6 +70,16 @@ Merging moves everything inside, subfolders included, into the folder that stays
 
 As calibrated on three invented libraries: 0 of 18 distinct folders in two ordinary libraries were wrongly merged or renamed; in a deliberately messy one all 5 planted problems were found (1 empty folder, 3 merges, 1 rename). The rename names are a fixed list, not generated, so an unusual topic gets no suggestion rather than a made-up one.
 
+**Order and Archive** (`extension/src/order.js`, `usage.js`). These use what you actually open, not what a bookmark is about.
+
+- **Signal.** Chrome 114+ stores `dateLastUsed` on each bookmark, with no extra permission. With the optional `history` permission, visits in the last 3 months are counted as well. Chrome keeps only a few months of history, so visit counts only ever decide what is used *often*, never that something is unused for a year.
+- **Top of the folder.** In a folder with 6 or more bookmarks, up to a quarter of it (at most 5) moves to the top: with history, pages visited 3 or more times in 3 months, most visited first; without, those opened in the last 45 days, newest first. Anything already near the top stays. With no sign of use, nothing is moved: order is never guessed.
+- **Folders.** Up to 3 of the busiest folders move ahead of their sibling folders. Only folders swap places with folders, so shortcuts and loose bookmarks on the bar keep their position.
+- **Archive.** Saved over a year ago and not opened for over a year (or never, as far as Chrome can tell). Only offered when at least 10 bookmarks and 10% of all of them have an opened date, because a bookmark with no date could simply be untracked (for example on a new computer). Bookmarks on the bar itself, ones you chose to keep in place, and ones with recent visits are never offered.
+- **Undo** restores every position, including moves down the list, which Chrome counts differently from moves up (covered by a test).
+
+**Limits.** I could not verify how many of your older bookmarks carry an opened date; the Archive suggestion switches itself off when too few do. Chrome has no hidden bookmarks: Archive is simply not on the bar, and it is still visible in the bookmark manager and synced.
+
 ## Try it without touching your bookmarks
 
 Opening `extension/organizer.html` outside Chrome loads fictional demo data, which is handy for screenshots:
@@ -88,6 +101,7 @@ node --test extension/tests/*.test.js    # Node 22+
 - `extension/src/learn.js`: learns what each folder is about (TF-IDF similarity, leave-one-out check, and the meaning-based path)
 - `extension/src/semantic.js`, `embed.js`, `model-loader.js`: meaning scores, the small embedder (WordPiece + averaged vectors), and the same-origin model loader
 - `extension/src/folders.js`: proposals for the folders themselves (delete empty, merge, rename)
+- `extension/src/order.js`, `usage.js`: what to move to the top, and what to archive, from last-opened dates and optional visit counts
 - `extension/src/quickaccess.js`: which bookmarks-bar items count as shortcuts
 - `extension/src/url.js`: URL helpers
 - `extension/src/present.js`: turns reasons into plain sentences and prepares what the interface shows (tested, so the wording stays human)

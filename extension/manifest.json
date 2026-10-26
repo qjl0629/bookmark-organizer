@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Clean up your bookmarks. Learns from your own folders, previews every move, and can undo. Runs entirely on your device.",
   "permissions": ["bookmarks", "storage"],
+  "optional_permissions": ["history"],
   "action": {
     "default_title": "Organize bookmarks"
   },

@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { createMemoryBookmarks } from "../src/memory-bookmarks.js";
 import { buildPlan } from "../src/planner.js";
-import { avatarHue, avatarLetter, describeWhy, folderChip, kindPhrase, shorten } from "../src/present.js";
+import { avatarHue, avatarLetter, describeWhy, displayUrl, folderChip, isOpenable, kindPhrase, shorten } from "../src/present.js";
 
 const bm = (title, url) => ({ title, url });
 const folder = (title, children = []) => ({ title, children });
@@ -13,10 +13,9 @@ test("each kind of reason reads as a plain sentence", () => {
   assert.equal(describeWhy({ type: "sameSite", host: "github.com", count: 4, total: 4, folder: "Dev" }), "Your other github.com bookmarks are in “Dev”.");
   assert.equal(describeWhy({ type: "folderName", folder: "Recipes" }), "Its title or website matches your “Recipes” folder.");
   assert.equal(describeWhy({ type: "kindFolder", category: "Shopping", folder: "Buy" }), "Your “Buy” folder is mostly shopping sites, like this one.");
-  assert.equal(describeWhy({ type: "similar", titles: ["Atlas plan", "Atlas roadmap"], folder: "Project Atlas" }), "Looks a lot like your “Atlas plan” and “Atlas roadmap” in “Project Atlas”.");
-  assert.equal(describeWhy({ type: "similar", titles: [], folder: "Project Atlas" }), "Looks similar to what's in “Project Atlas”.");
-  assert.equal(describeWhy({ type: "topic", titles: ["Vegan chili", "Pad thai"], folder: "Recipes", ownFolder: "Travel" }), "About the same thing as your “Vegan chili” and “Pad thai” in “Recipes”. It doesn't match the rest of “Travel”.");
-  assert.equal(describeWhy({ type: "topic", titles: [], folder: "Recipes" }), "About the same subject as what's in “Recipes”.");
+  assert.equal(describeWhy({ type: "similar", titles: ["Atlas plan"], folder: "Project Atlas" }), "Looks like the bookmarks you already have in “Project Atlas”.");
+  assert.equal(describeWhy({ type: "similarElsewhere", titles: ["x"], folder: "SharePoint", ownFolder: "App Explore" }), "Looks more like “SharePoint” than the rest of “App Explore”.");
+  assert.equal(describeWhy({ type: "topic", titles: ["Vegan chili"], folder: "Recipes", ownFolder: "Travel" }), "Same subject as your other “Recipes” bookmarks.");
   assert.equal(describeWhy({ type: "topicName", folder: "Travel", ownFolder: "Finance" }), "Its subject fits the folder name “Travel”, not “Finance”.");
   assert.equal(describeWhy({ type: "topicName", folder: "Travel" }), "Its subject fits the folder name “Travel”.");
   assert.equal(describeWhy({ type: "emptyFolder" }), "Nothing is in this folder.");
@@ -34,7 +33,16 @@ test("each kind of reason reads as a plain sentence", () => {
 test("long titles are shortened inside sentences", () => {
   const long = "A".repeat(100);
   assert.ok(shorten(long).length <= 42);
-  assert.ok(describeWhy({ type: "similar", titles: [long], folder: "F" }).length < 120);
+  assert.ok(describeWhy({ type: "mergeSimilar", from: "A", to: "B", titles: [long] }).length < 160);
+});
+
+test("addresses are shown whole but without the noise, and only web pages are clickable", () => {
+  assert.equal(displayUrl("https://www.example.com/sites/My%20Team/Shared%20Documents/plan.pptx?web=1#top"), "example.com/sites/My Team/Shared Documents/plan.pptx?web=1");
+  assert.equal(displayUrl("https://example.com/"), "example.com");
+  assert.equal(displayUrl("not a url"), "not a url");
+  assert.equal(displayUrl("https://example.com/%E0%A4%A"), "example.com/%E0%A4%A");
+  assert.ok(isOpenable("https://example.com") && isOpenable("http://example.com/x"));
+  assert.ok(!isOpenable("javascript:alert(1)") && !isOpenable("chrome://settings") && !isOpenable("file:///etc/hosts") && !isOpenable(""));
 });
 
 test("folder chips name the folder and only add where it lives when that helps", () => {

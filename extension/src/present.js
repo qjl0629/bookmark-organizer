@@ -49,21 +49,12 @@ export function describeWhy(why) {
       return `Looks like ${kindPhrase(why.category)}, and you already have a ${quote(why.folder)} folder for those.`;
     case "kindFolder":
       return `Your ${quote(why.folder)} folder is mostly ${kindPhrase(why.category)}, like this one.`;
-    case "similar": {
-      const seen = quoteList(why.titles);
-      return seen ? `Looks a lot like your ${seen} in ${quote(why.folder)}.` : `Looks similar to what's in ${quote(why.folder)}.`;
-    }
-    case "similarElsewhere": {
-      const seen = quoteList(why.titles);
-      return seen
-        ? `Fits better with your ${seen} in ${quote(why.folder)} than with the rest of ${quote(why.ownFolder)}.`
-        : `Fits better in ${quote(why.folder)} than in ${quote(why.ownFolder)}.`;
-    }
-    case "topic": {
-      const seen = quoteList(why.titles);
-      const base = seen ? `About the same thing as your ${seen} in ${quote(why.folder)}.` : `About the same subject as what's in ${quote(why.folder)}.`;
-      return why.ownFolder ? `${base} It doesn't match the rest of ${quote(why.ownFolder)}.` : base;
-    }
+    case "similar":
+      return `Looks like the bookmarks you already have in ${quote(why.folder)}.`;
+    case "similarElsewhere":
+      return why.ownFolder ? `Looks more like ${quote(why.folder)} than the rest of ${quote(why.ownFolder)}.` : `Looks like the bookmarks in ${quote(why.folder)}.`;
+    case "topic":
+      return `Same subject as your other ${quote(why.folder)} bookmarks.`;
     case "topicName":
       return why.ownFolder
         ? `Its subject fits the folder name ${quote(why.folder)}, not ${quote(why.ownFolder)}.`
@@ -102,6 +93,29 @@ export function describeWhy(why) {
       return "";
   }
 }
+
+// A web address as a person would read it: no "https://", no "www.", readable characters, and
+// no #fragment. The whole address is kept so the bookmark can be recognised.
+export function displayUrl(url) {
+  const raw = String(url ?? "").trim();
+  try {
+    const parsed = new URL(raw);
+    if (!parsed.hostname) return raw;
+    let path = parsed.pathname;
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      /* keep it as it was */
+    }
+    return `${parsed.hostname.replace(/^www\./, "")}${path.replace(/\/+$/, "")}${parsed.search}`;
+  } catch {
+    return raw;
+  }
+}
+
+// Only web pages become links. A bookmarklet ("javascript:") or an internal browser page
+// must never be turned into something clickable here.
+export const isOpenable = (url) => /^https?:\/\//i.test(String(url ?? "").trim());
 
 // Why a bookmarks-bar item is treated as a shortcut, in everyday words.
 export function shortcutWhy(reason) {

@@ -1,7 +1,7 @@
 import { applyPlan, undoRun } from "./src/apply.js";
 import { loadEmbedder } from "./src/model-loader.js";
 import { buildPlan, dismissKey, hostOf, normalizeUrl } from "./src/planner.js";
-import { CONFIDENCE, avatarHue, avatarLetter, describeWhy, folderChip, shortcutWhy } from "./src/present.js";
+import { CONFIDENCE, avatarHue, avatarLetter, describeWhy, displayUrl, folderChip, isOpenable, shortcutWhy } from "./src/present.js";
 
 // Outside Chrome (previews, screenshots) fall back to fictional demo data.
 const isDemo = !globalThis.chrome?.bookmarks;
@@ -160,12 +160,15 @@ function avatar(item) {
 }
 
 function siteCell(item) {
-  return el(
-    "div",
-    { class: "site" },
+  const label = item.title || hostOf(item.url) || item.url;
+  const body = [
     avatar(item),
-    el("div", { class: "site-text" }, el("div", { class: "title", text: item.title || item.url, title: item.title || item.url }), el("div", { class: "domain", text: hostOf(item.url) || item.url })),
-  );
+    el("div", { class: "site-text" }, el("div", { class: "title", text: label }), el("div", { class: "url", text: displayUrl(item.url) })),
+  ];
+  // Opening a bookmark lets people check what it is before agreeing to move it.
+  return isOpenable(item.url)
+    ? el("a", { class: "site is-link", href: item.url.trim(), target: "_blank", rel: "noopener noreferrer", title: `Open in a new tab\n${item.url}` }, body)
+    : el("div", { class: "site", title: item.url }, body);
 }
 
 function folderChipEl(path, variant, { isNew = false } = {}) {
@@ -180,7 +183,27 @@ function folderChipEl(path, variant, { isNew = false } = {}) {
   );
 }
 
-const route = (fromPath, toNode) => el("div", { class: "route" }, folderChipEl(fromPath, "from"), icon("arrow", 18), toNode);
+const leg = (label, node) => el("div", { class: "leg" }, el("span", { class: "leg-label", text: label }), node);
+const route = (fromPath, toNode, [fromLabel, toLabel] = ["Now in", "Move to"]) =>
+  el("div", { class: "route" }, leg(fromLabel, folderChipEl(fromPath, "from")), icon("arrow", 18), leg(toLabel, toNode));
+
+// The reason is there when you want it, not in the way when you don't.
+function explain(text) {
+  if (!text) return { button: null, panel: null };
+  const panel = el("p", { class: "why-text", hidden: true, text });
+  const button = el("button", {
+    class: "textbtn why-btn",
+    text: "Why?",
+    "aria-expanded": "false",
+    onclick: () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      button.setAttribute("aria-expanded", String(open));
+      button.textContent = open ? "Hide" : "Why?";
+    },
+  });
+  return { button, panel };
+}
 
 function sure(confidence) {
   const filled = { high: 3, medium: 2, low: 1 }[confidence] ?? 1;
@@ -200,8 +223,9 @@ function checkbox(checked, label, onChange) {
   return el("label", { class: "check" }, input, el("span", { class: "box" }, icon("check", 14, 3)));
 }
 
-function planRow(item, selected, { toNode, why, extra = null, showSure = true }) {
+function planRow(item, selected, { toNode, why, extra = null, showSure = true, labels }) {
   const row = el("li", { class: `row${selected.has(item.id) ? " is-selected" : ""}` });
+  const { button, panel } = explain(why);
   row.append(
     checkbox(selected.has(item.id), `Select ${item.title || item.url}`, (on) => {
       if (on) selected.add(item.id);
@@ -210,9 +234,9 @@ function planRow(item, selected, { toNode, why, extra = null, showSure = true })
       updateBar();
     }),
     siteCell(item),
-    route(item.fromPath ?? item.path, toNode),
-    showSure ? sure(item.confidence) : el("span"),
-    el("p", { class: "why" }, el("span", { text: why }), extra),
+    route(item.fromPath ?? item.path, toNode, labels),
+    el("div", { class: "meta" }, showSure ? sure(item.confidence) : null, button, extra),
+    panel,
   );
   return row;
 }
@@ -303,7 +327,7 @@ function movesCard() {
         why: describeWhy(item.why),
         extra:
           item.fromParentId === barRootId
-            ? el("button", { class: "textbtn", text: "Keep on bar", title: "It's a shortcut I click to open. Don't move it.", onclick: () => keepOnBar(item.url) })
+            ? el("button", { class: "textbtn keep", text: "Keep on bar", title: "It's a shortcut I click to open. Don't move it.", onclick: () => keepOnBar(item.url) })
             : null,
       }),
   });
@@ -325,7 +349,7 @@ function reviewCard() {
       planRow(item, state.review, {
         toNode: folderChipEl(item.to.path, "to"),
         why: describeWhy(item.why),
-        extra: el("button", { class: "textbtn", text: "Keep it here", onclick: () => keepHere(item) }),
+        extra: el("button", { class: "textbtn keep", text: "Keep it here", onclick: () => keepHere(item) }),
       }),
   });
 }
@@ -349,6 +373,8 @@ function foldersCard() {
           ? el("span", { class: "chip remove" }, icon("trash", 15), el("span", { class: "name", text: "Delete this folder" }))
           : folderChipEl(item.kind === "merge" ? item.toPath : [...item.path.slice(0, -1), item.toTitle], "to");
       const row = el("li", { class: `row${state.folderOps.has(item.id) ? " is-selected" : ""}` });
+      const labels = { delete: ["Empty folder", "Action"], merge: ["This folder", "Merge into"], rename: ["Now called", "Rename to"] }[item.kind];
+      const { button, panel } = explain(describeWhy(item.why));
       row.append(
         checkbox(state.folderOps.has(item.id), `Select: ${actions[item.kind]} ${from[from.length - 1]}`, (on) => {
           if (on) state.folderOps.add(item.id);
@@ -360,11 +386,11 @@ function foldersCard() {
           "div",
           { class: "site" },
           el("span", { class: "avatar", style: "--h:215", "aria-hidden": "true" }, icon("folder", 18)),
-          el("div", { class: "site-text" }, el("div", { class: "title", text: actions[item.kind] }), el("div", { class: "domain", text: item.count ? plural(item.count, "item") : "Empty" })),
+          el("div", { class: "site-text" }, el("div", { class: "title", text: actions[item.kind] }), el("div", { class: "url", text: item.count ? plural(item.count, "item") : "Nothing inside" })),
         ),
-        route(from, toNode),
-        sure(item.confidence),
-        el("p", { class: "why", text: describeWhy(item.why) }),
+        route(from, toNode, labels),
+        el("div", { class: "meta" }, sure(item.confidence), button),
+        panel,
       );
       return row;
     },
@@ -387,6 +413,7 @@ function dupsCard() {
       planRow(item, state.removals, {
         toNode: el("span", { class: "chip remove" }, icon("trash", 15), el("span", { class: "name", text: "Remove this copy" })),
         why: describeWhy({ type: "duplicate", keepFolder: item.keepPath[item.keepPath.length - 1] }),
+        labels: ["Now in", "Action"],
         showSure: false,
       }),
   });

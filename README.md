@@ -2,7 +2,7 @@
 
 A Chrome extension that organizes your bookmarks the way you already do. It learns from the folders you built, shows every proposed move, and can undo the whole run.
 
-- **You always see where a bookmark is going.** Every suggestion reads as a route: the site, the folder it is in now, an arrow, and the folder I'd put it in, plus one plain sentence on why. No scores or jargon.
+- **You always see where a bookmark is going.** Every suggestion shows the bookmark with its full address, the folder it is in now, an arrow, and the folder I'd put it in. Click any bookmark to open it in a new tab and check what it is. A "Why?" link gives a one-line reason when you want it. No scores or jargon.
 - **Learns from you.** A loose bookmark follows the folder that already holds most bookmarks from the same site, or the folder that mostly holds that kind of site (a folder called "Buy" full of shopping sites counts as your shopping folder). Built-in categories are only a fallback.
 - **Your shortcuts stay put.** Things on the bookmarks bar that you click to *use* (Gmail, ChatGPT, bookmarklets, icon-only bookmarks, short-named home pages) are never moved. You can mark any item "Keep on bar" or "Organize it anyway", and it is remembered.
 - **Understands what a page is about.** A small language model ships inside the extension (about 8 MB, runs on your computer). A bookmark about pasta belongs with your recipes even if no word is shared, and a mortgage article in your Health folder gets flagged. It can be switched off in "How I decide".

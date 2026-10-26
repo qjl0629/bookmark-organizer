@@ -18,6 +18,20 @@ const PLACE = { minScore: 0.25, margin: 0.05 };
 // Added to every vector's norm, as if each bookmark also had one unmatched token. Without it
 // two bookmarks sharing a single common word would look identical.
 const SMOOTHING = 4;
+// Words or path parts a suggestion must share with the target folder. A shared website says
+// nothing about the topic, and a single shared word ("copilot") is too easily a coincidence.
+const MIN_EVIDENCE = 2;
+// A website seen in this many folders is a platform (SharePoint, ServiceNow...), not a topic.
+// Other tokens are only treated as generic when they show up in more folders than that.
+const PLATFORM_HOST_FOLDERS = 2;
+const GENERIC_TOKEN_FOLDERS = 3;
+
+// URL path parts that name a kind of page rather than a subject.
+const GENERIC_SEGMENTS = new Set([
+  "sites", "site", "teams", "team", "personal", "pages", "page", "sitepages", "shared documents", "documents",
+  "lists", "forms", "wiki", "browse", "view", "docs", "doc", "d", "c", "p", "s", "r", "g", "u", "en", "en-us",
+  "app", "apps", "home", "index", "dashboard", "portal", "search", "login", "signin", "kb", "sp", "files",
+]);
 
 const stem = (token) => (token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token);
 const safeDecode = (text) => {
@@ -28,6 +42,8 @@ const safeDecode = (text) => {
   }
 };
 const looksLikeId = (segment) => /^\d+$/.test(segment) || /^[0-9a-f-]{12,}$/i.test(segment);
+// A title that is just a web address (or a shortened one ending in "...") has no words of its own.
+const looksLikeAddress = (title) => /^(https?:\/\/)?([a-z0-9-]+\.)+[a-z]{2,}([/?#:]|\.\.\.|…|$)/i.test(title.trim());
 
 function rawTokens(bookmark) {
   const tokens = new Map();
@@ -37,17 +53,19 @@ function rawTokens(bookmark) {
   if (host) add(`h:${host}`, 2);
   let segments = [];
   try {
-    segments = new URL(bookmark.url).pathname.split("/").filter(Boolean).map((s) => safeDecode(s).toLowerCase());
+    segments = new URL(bookmark.url).pathname.split("/").filter(Boolean).map((s) => safeDecode(s).toLowerCase().replace(/\.[a-z0-9]{2,5}$/, ""));
   } catch {
     /* not a URL */
   }
-  const useful = segments.filter((s) => !looksLikeId(s) && s.length <= 40);
+  const useful = segments.filter((s) => !looksLikeId(s) && s.length <= 40 && !GENERIC_SEGMENTS.has(s));
   if (useful[0]) add(`p:${useful[0]}`, 1);
   if (useful[1]) add(`p:${useful[0]}/${useful[1]}`, 1.5);
 
   const title = (bookmark.title ?? "").toLowerCase();
-  for (const word of title.match(/[a-z0-9]+/g) ?? []) {
-    if (word.length >= 3 && !STOP.has(word) && !looksLikeId(word)) add(`w:${stem(word)}`, 1);
+  const hostLabels = new Set(host.split(/[.-]/));
+  const words = looksLikeAddress(title) ? [] : title.match(/[a-z0-9]+/g) ?? [];
+  for (const word of words) {
+    if (word.length >= 3 && !STOP.has(word) && !looksLikeId(word) && !hostLabels.has(word)) add(`w:${stem(word)}`, 1);
   }
   for (const run of title.match(/\p{Script=Han}+/gu) ?? []) {
     if (run.length === 1) add(`w:${run}`, 0.6);
@@ -60,15 +78,24 @@ export function buildModel(items) {
   const n = items.length;
   const raw = items.map(rawTokens);
   const df = new Map();
-  for (const tokens of raw) for (const t of tokens.keys()) df.set(t, (df.get(t) ?? 0) + 1);
+  const folders = new Map(); // token -> folders it appears in
+  raw.forEach((tokens, i) => {
+    for (const t of tokens.keys()) {
+      df.set(t, (df.get(t) ?? 0) + 1);
+      if (!folders.has(t)) folders.set(t, new Set());
+      folders.get(t).add(items[i].parentId);
+    }
+  });
+  const isGeneric = (token) => folders.get(token).size >= (token.startsWith("h:") ? PLATFORM_HOST_FOLDERS : GENERIC_TOKEN_FOLDERS);
 
   const vectors = raw.map((tokens) => {
     const vector = new Map();
     let sumSquares = 0;
     for (const [token, weight] of tokens) {
       // A token only this bookmark has can't say anything about which folder it belongs in,
-      // and long unique titles would otherwise drown out the few words it shares.
-      if (df.get(token) < 2) continue;
+      // and long unique titles would otherwise drown out the few words it shares. A token
+      // spread across many folders can't say it either.
+      if (df.get(token) < 2 || isGeneric(token)) continue;
       const value = weight * (Math.log((n + 1) / (df.get(token) + 1)) + 1);
       vector.set(token, value);
       sumSquares += value * value;
@@ -94,6 +121,12 @@ export function buildModel(items) {
       }
       return sims;
     },
+    // How many words or path parts two bookmarks share, not counting the website.
+    sharedContent(i, j) {
+      let count = 0;
+      for (const token of vectors[i].keys()) if (!token.startsWith("h:") && vectors[j].has(token)) count++;
+      return count;
+    },
   };
 }
 
@@ -118,10 +151,12 @@ export function learnFromFolders(folders, bookmarks) {
       const rest = indexes.filter((j) => j !== i);
       if (rest.length < MIN_MEMBERS) continue;
       const ranked = rest.map((j) => [sims[j], j]).sort((a, b) => b[0] - a[0]);
+      const top = ranked.slice(0, 2).filter(([s]) => s > 0);
       out.push({
         folder: folderById.get(folderId),
         score: (ranked[0][0] + ranked[1][0]) / 2,
-        neighbors: ranked.slice(0, 2).filter(([s]) => s > 0).map(([, j]) => bookmarks[j]),
+        neighbors: top.map(([, j]) => bookmarks[j]),
+        evidence: Math.max(0, ...top.map(([, j]) => model.sharedContent(i, j))),
       });
     }
     return out.sort((a, b) => b.score - a.score);
@@ -154,7 +189,7 @@ export function learnFromFolders(folders, bookmarks) {
     // Scores behind a decision: how much a bookmark resembles each folder. For debugging and tuning.
     explain(bookmark) {
       const i = bookmarks.indexOf(bookmark);
-      return i < 0 ? [] : rank(i).map((r) => ({ folder: r.folder.path.join("/"), score: Number(r.score.toFixed(3)) }));
+      return i < 0 ? [] : rank(i).map((r) => ({ folder: r.folder.path.join("/"), score: Number(r.score.toFixed(3)), evidence: r.evidence }));
     },
 
     // Bookmarks that look out of place in a folder the model understands well.
@@ -168,7 +203,7 @@ export function learnFromFolders(folders, bookmarks) {
           const ranking = cache.get(i);
           const own = ranking.find((r) => r.folder.id === folderId)?.score ?? 0;
           const best = ranking.find((r) => r.folder.id !== folderId);
-          if (!best || best.score < MISFILED.minScore) continue;
+          if (!best || best.score < MISFILED.minScore || best.evidence < MIN_EVIDENCE) continue;
           const gap = best.score - own;
           if (gap < MISFILED.minGap) continue;
           results.push({
@@ -197,7 +232,7 @@ export function learnFromFolders(folders, bookmarks) {
       const i = bookmarks.indexOf(bookmark);
       if (i < 0) return null;
       const [top, second] = rank(i);
-      if (!top || top.score < PLACE.minScore || (second && top.score - second.score < PLACE.margin)) return null;
+      if (!top || top.score < PLACE.minScore || top.evidence < MIN_EVIDENCE || (second && top.score - second.score < PLACE.margin)) return null;
       const seen = top.neighbors.map((b) => `"${shorten(b.title || b.url)}"`).join(", ");
       return {
         folder: top.folder,

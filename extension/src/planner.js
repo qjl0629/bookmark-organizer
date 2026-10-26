@@ -99,6 +99,15 @@ const HOLDING_FOLDERS = new Set([
 const isHolding = (folder) => HOLDING_FOLDERS.has(folder.title.trim().toLowerCase());
 export const dismissKey = (bookmark) => `${normalizeUrl(bookmark.url)}|${bookmark.parentId}`;
 
+// "Work & Productivity" is SharePoint, Notion, Slack, Google Docs: platforms that hold
+// anything, so being on one says nothing about what a bookmark is about. It is never used
+// to judge where a bookmark belongs.
+const PLATFORM_KINDS = new Set(["Work & Productivity"]);
+const kindOfSite = (url) => {
+  const kind = categorizeHost(url);
+  return PLATFORM_KINDS.has(kind) ? null : kind;
+};
+
 function dominantCategory(members) {
   const counts = new Map();
   for (const m of members) if (m.category) counts.set(m.category, (counts.get(m.category) ?? 0) + 1);
@@ -120,7 +129,7 @@ function dominantCategory(members) {
 function folderProfiles(folders, bookmarks) {
   const members = new Map(folders.map((f) => [f.id, []]));
   for (const b of bookmarks) {
-    if (members.has(b.parentId)) members.get(b.parentId).push({ ...b, category: categorizeHost(b.url), host: hostOf(b.url) });
+    if (members.has(b.parentId)) members.get(b.parentId).push({ ...b, category: kindOfSite(b.url), host: hostOf(b.url) });
   }
   const targets = [];
   for (const folder of folders) {

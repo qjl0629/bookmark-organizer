@@ -36,13 +36,14 @@ A Chrome extension that organizes your bookmarks the way you already do. It lear
 **Bookmarks already in folders** are checked two ways, and only flagged when another folder clearly fits better:
 
 - **By content, learned from your own folders.** Each bookmark is turned into its address, the first parts of its path and the words in its title, then compared with what every folder already holds. A bookmark that resembles a different folder much more than its own is flagged, with the two or three bookmarks it resembles shown as the reason. This works for work and internal sites that no built-in list could know. As a test, every bookmark is hidden in turn and its folder guessed from the rest. Folders where that guess is right less than half the time (their bookmarks don't resemble each other) are skipped, and listed under "How I read your folders" so you can see why.
+- **A shared website is not a shared topic.** A site that appears in several of your folders (SharePoint, a ticketing portal) is treated as a platform and ignored, as are generic address parts like `sites` or `wiki`, and a title that is just a web address has no words of its own. To suggest a move, a bookmark must also share at least two words or address parts with the target folder. Bookmarks in a specific folder are not pulled into a general one just because they live on the same website.
 - **By kind of site.** A shopping site inside a folder of videos, using the built-in categories. Holding folders such as "Read later" are never judged.
 
 Loose bookmarks that match no rule above are also placed by content similarity before a new folder is suggested.
 
 Every proposal shows its confidence and the reason.
 
-**Limits.** It judges by words and addresses, not by what a page says, so two unrelated pages with similar titles can be confused, and folders with fewer than 4 bookmarks can't be judged. On a library with few bookmarks per folder expect more false alarms, which is why nothing in "Possibly in the wrong folder" is pre-selected. A wrong suggestion costs more trust than a missed one.
+**Limits.** It judges by words and addresses, not by what a page means, so it can't know that "Copilot Studio" is part of the Power Platform if no bookmark in that folder says so, and folders with fewer than 4 bookmarks can't be judged. When unsure it stays quiet, so it misses some real mix-ups on purpose, and nothing in "Might be in the wrong folder" is pre-selected. A wrong suggestion costs more trust than a missed one. Understanding meaning would need a language model, which is not part of this local-only version.
 
 ## Try it without touching your bookmarks
 

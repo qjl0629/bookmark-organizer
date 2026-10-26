@@ -1,12 +1,26 @@
 import { applyPlan, undoRun } from "./src/apply.js";
 import { buildPlan, dismissKey, hostOf, normalizeUrl } from "./src/planner.js";
+import { CONFIDENCE, avatarHue, avatarLetter, describeWhy, folderChip, shortcutWhy } from "./src/present.js";
 
 // Outside Chrome (previews, screenshots) fall back to fictional demo data.
 const isDemo = !globalThis.chrome?.bookmarks;
 if (isDemo) (await import("./src/demo.js")).installDemo();
 
 const $ = (id) => document.getElementById(id);
-const state = { plan: null, moves: new Set(), review: new Set(), removals: new Set(), seenMoves: new Set(), busy: false };
+const state = {
+  plan: null,
+  lastRun: null,
+  moves: new Set(),
+  review: new Set(),
+  removals: new Set(),
+  seenMoves: new Set(),
+  expanded: { moves: false, review: false, dups: false },
+  justApplied: false,
+  busy: false,
+};
+const PREVIEW_ROWS = 6;
+
+// ---------------------------------------------------------------- helpers
 
 // All bookmark text is inserted as text nodes, never as HTML. Empty children (null, false)
 // are skipped, otherwise append() would print the word "null".
@@ -15,6 +29,7 @@ function el(tag, attrs = {}, ...children) {
   for (const [key, value] of Object.entries(attrs)) {
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
+    else if (key === "style") node.setAttribute("style", value);
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else if (value === true) node.setAttribute(key, "");
     else if (value !== false && value != null) node.setAttribute(key, value);
@@ -23,46 +38,45 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-const copies = (n, prefix = "") => `${n} ${prefix}cop${n === 1 ? "y" : "ies"}`;
-
-// Re-rendering a section after a bulk change must not collapse groups the user has opened.
-const openGroups = (root) =>
-  new Set([...root.querySelectorAll("details")].filter((d) => d.open).map((d) => d.querySelector(".group-name")?.textContent));
-const isOpen = (open, label, fallback) => (open ? open.has(label) : fallback);
-
-// "Select all" / "High & medium only" / "Clear" for one section. `items` need an id, and a
-// confidence when the middle button should be offered.
-const CONFIDENT = new Set(["high", "medium"]);
-function selectionTools(items, selected, refresh) {
-  const choose = (pick) => {
-    for (const item of items) {
-      if (pick(item)) selected.add(item.id);
-      else selected.delete(item.id);
-    }
-    refresh();
-    updateFooter();
-  };
-  const confident = items.filter((item) => CONFIDENT.has(item.confidence)).length;
-  return el(
-    "div",
-    { class: "tools" },
-    el("button", { class: "tool", text: `Select all (${items.length})`, onclick: () => choose(() => true) }),
-    confident > 0 && confident < items.length
-      ? el("button", { class: "tool", text: `High & medium only (${confident})`, onclick: () => choose((item) => CONFIDENT.has(item.confidence)) })
-      : null,
-    el("button", { class: "tool", text: "Clear", onclick: () => choose(() => false) }),
-  );
+// Static, trusted icon markup only. Never put bookmark text in here.
+const ICONS = {
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  bar: '<path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  swap: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
+  undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  inbox: '<path d="M4 13l2-8h12l2 8M4 13v6h16v-6M4 13h5l1 2h4l1-2h5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+};
+function icon(name, size = 16, width = 2) {
+  const holder = document.createElement("span");
+  holder.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+  return holder.firstElementChild;
 }
 
-function setStatus(text, kind = "") {
-  const node = $("status");
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const percent = (value) => `${Math.round(value * 100)}%`;
+
+let toastTimer = null;
+function toast(text, kind = "") {
+  const node = $("toast");
   node.textContent = text;
-  node.className = kind;
+  node.className = `toast${kind ? ` is-${kind}` : ""}`;
+  node.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (node.hidden = true), kind === "error" ? 9000 : 4500);
 }
 
-// Choices the user made, remembered across runs: shortcuts to keep on the bar, items to
-// organize even though they look like shortcuts, and "keep here" answers for review items.
+// ---------------------------------------------------------------- remembered choices
+
+// Shortcuts to keep on the bar, items to organize even though they look like shortcuts,
+// and "keep it here" answers. Stored on this device only.
 const SETTING_KEYS = ["pinned", "organizeAnyway", "dismissed"];
 
 async function readSettings() {
@@ -74,7 +88,9 @@ async function changeSettings(mutate) {
   const settings = await readSettings();
   mutate(settings);
   await chrome.storage.local.set(Object.fromEntries(SETTING_KEYS.map((key) => [key, [...settings[key]]])));
+  const y = window.scrollY;
   await load();
+  window.scrollTo(0, y);
 }
 
 const keepOnBar = (url) =>
@@ -89,9 +105,14 @@ const organizeAnyway = (url) =>
   });
 const keepHere = (item) => changeSettings((s) => s.dismissed.add(dismissKey({ url: item.url, parentId: item.fromParentId })));
 
+// ---------------------------------------------------------------- data
+
 async function load() {
   const settings = await readSettings();
+  const { lastRun } = await chrome.storage.local.get("lastRun");
+  state.lastRun = lastRun ?? null;
   state.plan = buildPlan(await chrome.bookmarks.getTree(), settings);
+
   // Keep the user's ticks across reloads; moves that appear for the first time start selected.
   const previous = state.moves;
   const seen = state.seenMoves;
@@ -100,319 +121,460 @@ async function load() {
   state.review = new Set([...state.review].filter((id) => state.plan.review.some((r) => r.id === id)));
   state.removals = new Set();
   render();
-  await renderUndo();
 }
 
-function render() {
-  $("demoBadge").hidden = !isDemo;
-  renderStats();
-  renderMoves();
-  renderReview();
-  renderDuplicates();
-  renderQuickAccess();
-  renderUnclassified();
-  renderDiagnostics();
-  updateFooter();
+const duplicateRows = () =>
+  state.plan.duplicates.flatMap((group) =>
+    group.slice(1).map((b) => ({ id: b.id, title: b.title, url: b.url, path: b.path, keepPath: group[0].path })),
+  );
+const changeCount = () => state.plan.moves.length + state.plan.review.length + duplicateRows().length;
+
+// Moves the user has ticked. A bookmark that is also ticked for removal is only removed.
+const selectedMoves = () =>
+  [
+    ...state.plan.moves.filter((m) => state.moves.has(m.id)),
+    ...state.plan.review.filter((r) => state.review.has(r.id)),
+  ].filter((m) => !state.removals.has(m.id));
+
+// ---------------------------------------------------------------- building blocks
+
+function avatar(item) {
+  const host = hostOf(item.url);
+  return el("span", { class: "avatar", style: `--h:${avatarHue(host)}`, "aria-hidden": "true" }, avatarLetter(item.title, host));
 }
 
-const percent = (value) => `${Math.round(value * 100)}%`;
+function siteCell(item) {
+  return el(
+    "div",
+    { class: "site" },
+    avatar(item),
+    el("div", { class: "site-text" }, el("div", { class: "title", text: item.title || item.url, title: item.title || item.url }), el("div", { class: "domain", text: hostOf(item.url) || item.url })),
+  );
+}
 
-// Explains how many bookmarks could actually be judged, so a short list isn't a mystery.
-function renderDiagnostics() {
-  const d = state.plan.diagnostics;
-  const root = $("diag");
-  const inFolders = state.plan.summary.bookmarks - state.plan.summary.loose;
-  if (!d.foldersWithEnoughBookmarks) {
-    root.replaceChildren(el("p", { class: "empty", text: "Not enough bookmarks in folders to learn from yet. Folders need at least 4 bookmarks." }));
-    return;
-  }
-  const lines = [
-    `${plural(inFolders, "bookmark")} sit inside folders. ${d.foldersJudged} of ${d.foldersWithEnoughBookmarks} folders with 4 or more bookmarks are clear enough to check by content (${plural(d.bookmarksInJudged, "bookmark")}).`,
-    `As a test, I hid each bookmark in turn and guessed its folder from the rest: right ${percent(d.accuracy)} of the time. A folder where I'm right less than half the time is not checked by content, because its bookmarks don't resemble each other.`,
-  ];
-  if (d.noTarget) lines.push(`${plural(d.noTarget, "bookmark")} looked out of place but no other folder fits, so nothing is suggested for them.`);
-  root.replaceChildren(
-    ...lines.map((text) => el("p", { text })),
-    d.mixed.length
-      ? el(
-          "details",
-          { class: "group" },
-          el("summary", {}, el("span", { class: "group-name", text: "Folders not checked by content (bookmarks look unrelated to each other)" }), el("span", { class: "count", text: plural(d.mixed.length, "folder") })),
-          d.mixed.map((m) =>
-            el("div", { class: "row keep" }, el("span", {}), el("span", { class: "title", text: m.path }), el("span", { class: "host", text: `${plural(m.size, "bookmark")}, ${percent(m.coherence)} recognizable` }), el("span", { class: "badge low", text: "skipped" })),
-          ),
-        )
+function folderChipEl(path, variant, { isNew = false } = {}) {
+  const chip = folderChip(path, { isNew });
+  return el(
+    "span",
+    { class: `chip ${variant}`, title: chip.full },
+    icon(chip.isRoot ? "bar" : "folder", 15),
+    el("span", { class: "name", text: chip.name }),
+    chip.hint ? el("span", { class: "hint", text: chip.hint }) : null,
+    chip.isNew ? el("span", { class: "tag-new", text: "New" }) : null,
+  );
+}
+
+const route = (fromPath, toNode) => el("div", { class: "route" }, folderChipEl(fromPath, "from"), icon("arrow", 18), toNode);
+
+function sure(confidence) {
+  const filled = { high: 3, medium: 2, low: 1 }[confidence] ?? 1;
+  const info = CONFIDENCE[confidence] ?? CONFIDENCE.low;
+  return el(
+    "span",
+    { class: "sure", title: info.hint },
+    el("span", { class: "meter", "aria-hidden": "true" }, [1, 2, 3].map((n) => el("i", { class: n <= filled ? "on" : "" }))),
+    info.word,
+  );
+}
+
+function checkbox(checked, label, onChange) {
+  const input = el("input", { type: "checkbox", "aria-label": label });
+  input.checked = checked;
+  input.addEventListener("change", () => onChange(input.checked));
+  return el("label", { class: "check" }, input, el("span", { class: "box" }, icon("check", 14, 3)));
+}
+
+function planRow(item, selected, { toNode, why, extra = null, showSure = true }) {
+  const row = el("li", { class: `row${selected.has(item.id) ? " is-selected" : ""}` });
+  row.append(
+    checkbox(selected.has(item.id), `Select ${item.title || item.url}`, (on) => {
+      if (on) selected.add(item.id);
+      else selected.delete(item.id);
+      row.classList.toggle("is-selected", on);
+      updateBar();
+    }),
+    siteCell(item),
+    route(item.fromPath ?? item.path, toNode),
+    showSure ? sure(item.confidence) : el("span"),
+    el("p", { class: "why" }, el("span", { text: why }), extra),
+  );
+  return row;
+}
+
+const CONFIDENT = new Set(["high", "medium"]);
+function selectionTools(items, selected, refresh) {
+  const choose = (pick) => {
+    for (const item of items) {
+      if (pick(item)) selected.add(item.id);
+      else selected.delete(item.id);
+    }
+    refresh();
+    updateBar();
+  };
+  const confident = items.filter((item) => CONFIDENT.has(item.confidence)).length;
+  return el(
+    "div",
+    { class: "tools" },
+    el("button", { class: "tool", text: "Select all", onclick: () => choose(() => true) }),
+    confident > 0 && confident < items.length
+      ? el("button", { class: "tool", text: `Only the likely ones (${confident})`, onclick: () => choose((item) => CONFIDENT.has(item.confidence)) })
+      : null,
+    el("button", { class: "tool", text: "Clear", onclick: () => choose(() => false) }),
+  );
+}
+
+function planCard({ id, kind, tone, iconName, title, blurb, items, selected, row, tools = true }) {
+  const expanded = state.expanded[kind];
+  const shown = expanded ? items : items.slice(0, PREVIEW_ROWS);
+  const hidden = items.length - shown.length;
+  return el(
+    "section",
+    { class: "card", id, "aria-labelledby": `${id}-title` },
+    el(
+      "header",
+      { class: "card-head" },
+      el("span", { class: `icon-badge${tone ? ` is-${tone}` : ""}` }, icon(iconName, 20)),
+      el("div", {}, el("h3", { id: `${id}-title` }, title, el("span", { class: "count", text: String(items.length) })), el("p", { text: blurb })),
+      tools ? selectionTools(items, selected, () => refreshCard(kind)) : null,
+    ),
+    el("ul", { class: "rows" }, shown.map(row)),
+    hidden > 0 || (expanded && items.length > PREVIEW_ROWS)
+      ? el("button", {
+          class: "more",
+          text: expanded ? "Show fewer" : `Show ${hidden} more`,
+          onclick: () => {
+            state.expanded[kind] = !expanded;
+            refreshCard(kind);
+          },
+        })
       : null,
   );
 }
 
-function renderStats() {
-  const s = state.plan.summary;
-  const items = [
-    ["Bookmarks", s.bookmarks],
-    ["Folders", s.folders],
-    ["Loose", s.loose],
-    ["Quick access (kept)", s.quickAccess],
-    ["Proposed moves", s.moves],
-    ["To review", s.review],
-    ["Duplicate groups", s.duplicateGroups],
-  ];
-  $("stats").replaceChildren(
-    ...items.map(([label, value]) => el("div", { class: "stat" }, el("strong", { text: String(value) }), el("span", { text: label }))),
-  );
-}
-
-function moveRow(move, onChange) {
-  const box = el("input", { type: "checkbox" });
-  box.checked = state.moves.has(move.id);
-  box.addEventListener("change", () => {
-    if (box.checked) state.moves.add(move.id);
-    else state.moves.delete(move.id);
-    onChange();
-    updateFooter();
-  });
-  const reason = el("span", { class: "reason" }, move.reason);
-  if (move.fromParentId === state.plan.barRootId) {
-    reason.append(
-      el("button", {
-        class: "link",
-        text: "Keep on bar",
-        title: "This is a shortcut I click to use. Don't move it.",
-        onclick: (event) => {
-          event.preventDefault();
-          keepOnBar(move.url);
-        },
-      }),
-    );
-  }
-  const row = el(
-    "label",
-    { class: "row" },
-    box,
-    el("span", { class: "title", text: move.title || move.url, title: move.url }),
-    el("span", { class: "host", text: hostOf(move.url) }),
-    el("span", { class: `badge ${move.confidence}`, text: move.confidence }),
-    reason,
-  );
-  return { row, box };
-}
-
-function moveGroup(group, open) {
-  const ids = group.moves.map((m) => m.id);
-  const all = el("input", { type: "checkbox", "aria-label": `Select all moves to ${group.label}` });
-  all.addEventListener("click", (event) => event.stopPropagation()); // don't toggle the <details>
-  const sync = () => {
-    const selected = ids.filter((id) => state.moves.has(id)).length;
-    all.checked = selected === ids.length;
-    all.indeterminate = selected > 0 && selected < ids.length;
-  };
-  const rows = group.moves.map((move) => moveRow(move, sync));
-  all.addEventListener("change", () => {
-    ids.forEach((id) => (all.checked ? state.moves.add(id) : state.moves.delete(id)));
-    rows.forEach(({ box }) => (box.checked = all.checked));
-    updateFooter();
-  });
-  sync();
-  return el(
+function quietCard({ id, tone, iconName, title, blurb, open = false }, ...content) {
+  const details = el(
     "details",
-    { class: "group", open },
+    { class: "card", id },
     el(
       "summary",
       {},
-      all,
-      el("span", { class: "group-name", text: group.label }),
-      group.isNew ? el("span", { class: "badge new", text: "new folder" }) : null,
-      el("span", { class: "count", text: plural(ids.length, "bookmark") }),
+      el("span", { class: `icon-badge${tone ? ` is-${tone}` : ""}` }, icon(iconName, 20)),
+      el("div", {}, el("h3", { text: title }), el("p", { text: blurb })),
+      el("span", { class: "chevron" }, icon("chevron", 20)),
     ),
-    rows.map(({ row }) => row),
+    ...content,
   );
+  details.open = open;
+  return details;
 }
 
-function renderMoves(open = null) {
-  const { moves } = state.plan;
-  if (!moves.length) {
-    $("moves").replaceChildren(el("p", { class: "empty", text: "Nothing to move. No loose bookmark matched one of your folders or a known category." }));
-    return;
-  }
-  const groups = new Map();
-  for (const move of moves) {
-    if (!groups.has(move.to.label)) groups.set(move.to.label, { label: move.to.label, isNew: !move.to.folderId, moves: [] });
-    groups.get(move.to.label).moves.push(move);
-  }
-  $("moves").replaceChildren(
-    selectionTools(moves, state.moves, () => renderMoves(openGroups($("moves")))),
-    ...[...groups.values()].map((group, index) => moveGroup(group, isOpen(open, group.label, index < 6))),
-  );
-}
+// ---------------------------------------------------------------- cards
 
-function renderDuplicates(open = null) {
-  const { duplicates } = state.plan;
-  const root = $("dups");
-  if (!duplicates.length) {
-    root.replaceChildren(el("p", { class: "empty", text: "No duplicates found." }));
-    return;
-  }
-  const extras = duplicates.flatMap((group) => group.slice(1).map((b) => ({ id: b.id })));
-  const items = duplicates.map((group) => {
-    const label = group[0].title || group[0].url;
-    return el(
-      "details",
-      { class: "group", open: isOpen(open, label, true) },
-      el("summary", {}, el("span", { class: "group-name", text: label }), el("span", { class: "count", text: copies(group.length) })),
-      group.map((bookmark, index) => {
-        if (index === 0) {
-          return el("div", { class: "row keep" }, el("span", {}), el("span", { class: "title", text: bookmark.path.join("/") }), el("span", { class: "host", text: "earliest, kept" }), el("span", { class: "badge high", text: "keep" }));
-        }
-        const box = el("input", { type: "checkbox" });
-        box.checked = state.removals.has(bookmark.id);
-        box.addEventListener("change", () => {
-          if (box.checked) state.removals.add(bookmark.id);
-          else state.removals.delete(bookmark.id);
-          updateFooter();
-        });
-        return el("label", { class: "row" }, box, el("span", { class: "title", text: bookmark.path.join("/") }), el("span", { class: "host", text: "extra copy" }), el("span", { class: "badge low", text: "remove" }));
+function movesCard() {
+  const { moves, barRootId } = state.plan;
+  if (!moves.length) return null;
+  return planCard({
+    id: "sec-moves",
+    kind: "moves",
+    iconName: "folder",
+    title: "Move into folders",
+    blurb: "These aren't in a folder yet. I matched each one to a folder you already have, or suggested a new one.",
+    items: moves,
+    selected: state.moves,
+    row: (item) =>
+      planRow(item, state.moves, {
+        toNode: folderChipEl(item.to.path, "to", { isNew: !!item.to.newFolder }),
+        why: describeWhy(item.why),
+        extra:
+          item.fromParentId === barRootId
+            ? el("button", { class: "textbtn", text: "Keep on bar", title: "It's a shortcut I click to open. Don't move it.", onclick: () => keepOnBar(item.url) })
+            : null,
       }),
-    );
   });
-  root.replaceChildren(selectionTools(extras, state.removals, () => renderDuplicates(openGroups($("dups")))), ...items);
 }
 
-function renderUnclassified() {
-  const { unclassified } = state.plan;
-  const root = $("unclassified");
-  if (!unclassified.length) {
-    root.replaceChildren(el("p", { class: "empty", text: "Every loose bookmark has a proposal." }));
-    return;
-  }
-  root.replaceChildren(
-    el(
-      "details",
-      { class: "group" },
-      el("summary", {}, el("span", { class: "group-name", text: "Loose bookmarks with no proposal" }), el("span", { class: "count", text: plural(unclassified.length, "bookmark") })),
-      unclassified.map(({ bookmark, reason }) =>
-        el("div", { class: "row keep" }, el("span", {}), el("span", { class: "title", text: bookmark.title || bookmark.url, title: bookmark.url }), el("span", { class: "host", text: hostOf(bookmark.url) }), el("span", { class: "badge low", text: "left alone" }), el("span", { class: "reason", text: reason })),
-      ),
-    ),
-  );
-}
-
-function renderReview(open = null) {
+function reviewCard() {
   const { review } = state.plan;
-  const root = $("review");
-  if (!review.length) {
-    root.replaceChildren(el("p", { class: "empty", text: "Nothing looks out of place." }));
-    return;
-  }
-  const title = "Bookmarks that may be in the wrong folder";
-  root.replaceChildren(
-    selectionTools(review, state.review, () => renderReview(openGroups($("review")))),
-    el(
-      "details",
-      { class: "group", open: isOpen(open, title, true) },
-      el("summary", {}, el("span", { class: "group-name", text: title }), el("span", { class: "count", text: plural(review.length, "bookmark") })),
-      review.map((item) => {
-        const keep = el("button", { class: "link", text: "Keep here", onclick: (event) => { event.preventDefault(); keepHere(item); } });
-        const reason = el("span", { class: "reason" }, item.reason, keep);
-        const label = el("span", { class: "host", text: `${item.fromPath.join("/")}  →  ${item.to.label}` });
-        const box = el("input", { type: "checkbox" });
-        box.checked = state.review.has(item.id);
-        box.addEventListener("change", () => {
-          if (box.checked) state.review.add(item.id);
-          else state.review.delete(item.id);
-          updateFooter();
-        });
-        return el("label", { class: "row" }, box, el("span", { class: "title", text: item.title || item.url, title: item.url }), label, el("span", { class: `badge ${item.confidence}`, text: item.confidence }), reason);
+  if (!review.length) return null;
+  return planCard({
+    id: "sec-review",
+    kind: "review",
+    tone: "warn",
+    iconName: "swap",
+    title: "Might be in the wrong folder",
+    blurb: "These are in a folder, but they look like they belong somewhere else. Skip any you disagree with.",
+    items: review,
+    selected: state.review,
+    row: (item) =>
+      planRow(item, state.review, {
+        toNode: folderChipEl(item.to.path, "to"),
+        why: describeWhy(item.why),
+        extra: el("button", { class: "textbtn", text: "Keep it here", onclick: () => keepHere(item) }),
       }),
-    ),
-  );
+  });
 }
 
-function renderQuickAccess() {
+function dupsCard() {
+  const items = duplicateRows();
+  if (!items.length) return null;
+  return planCard({
+    id: "sec-dups",
+    kind: "dups",
+    tone: "bad",
+    iconName: "copy",
+    title: "Duplicates",
+    blurb: "You saved these more than once. I'd keep the earliest copy and remove the rest.",
+    items,
+    selected: state.removals,
+    row: (item) =>
+      planRow(item, state.removals, {
+        toNode: el("span", { class: "chip remove" }, icon("trash", 15), el("span", { class: "name", text: "Remove this copy" })),
+        why: describeWhy({ type: "duplicate", keepFolder: item.keepPath[item.keepPath.length - 1] }),
+        showSure: false,
+      }),
+  });
+}
+
+function shortcutsCard() {
   const { quickAccess } = state.plan;
-  const root = $("quick");
-  if (!quickAccess.length) {
-    root.replaceChildren(el("p", { class: "empty", text: "No shortcuts detected on the bookmarks bar." }));
-    return;
-  }
-  root.replaceChildren(
+  if (!quickAccess.length) return null;
+  return quietCard(
+    {
+      id: "sec-shortcuts",
+      tone: "good",
+      iconName: "shield",
+      title: "Your shortcuts stay put",
+      blurb: `${plural(quickAccess.length, "bookmark")} on your bar that you click to open, like Gmail or ChatGPT. I won't move them.`,
+    },
     el(
-      "details",
-      { class: "group" },
-      el("summary", {}, el("span", { class: "group-name", text: "Shortcuts kept where they are" }), el("span", { class: "count", text: plural(quickAccess.length, "bookmark") })),
+      "ul",
+      { class: "rows" },
       quickAccess.map(({ bookmark, reason }) =>
         el(
-          "div",
-          { class: "row keep" },
-          el("span", {}),
-          el("span", { class: "title", text: bookmark.title || bookmark.url, title: bookmark.url }),
-          el("span", { class: "host", text: hostOf(bookmark.url) }),
-          el("span", { class: "badge high", text: "kept" }),
-          el("span", { class: "reason" }, reason, el("button", { class: "link", text: "Organize it anyway", onclick: () => organizeAnyway(bookmark.url) })),
+          "li",
+          { class: "row simple" },
+          siteCell(bookmark),
+          el("p", { class: "why" }, el("span", { text: shortcutWhy(reason) }), el("button", { class: "textbtn", text: "Tidy this one too", onclick: () => organizeAnyway(bookmark.url) })),
         ),
       ),
     ),
   );
 }
 
-function updateFooter() {
-  const moves = state.moves.size + state.review.size;
-  const removals = state.removals.size;
-  $("selection").textContent = `${plural(moves, "move")} and ${plural(removals, "duplicate removal")} selected`;
-  $("applyBtn").disabled = state.busy || moves + removals === 0;
-}
-
-// One click for everything in every section. Undo restores it all.
-function selectEverything(on) {
-  const extras = state.plan.duplicates.flatMap((group) => group.slice(1).map((b) => b.id));
-  state.moves = new Set(on ? state.plan.moves.map((m) => m.id) : []);
-  state.review = new Set(on ? state.plan.review.map((r) => r.id) : []);
-  state.removals = new Set(on ? extras : []);
-  renderMoves(openGroups($("moves")));
-  renderReview(openGroups($("review")));
-  renderDuplicates(openGroups($("dups")));
-  updateFooter();
-}
-
-async function renderUndo() {
-  const { lastRun } = await chrome.storage.local.get("lastRun");
-  const banner = $("undoBanner");
-  banner.hidden = !lastRun;
-  if (!lastRun) return;
-  banner.replaceChildren(
-    el("span", { text: `Last run ${new Date(lastRun.time).toLocaleString()}: ${lastRun.moved.length} moved, ${lastRun.removed.length} removed. Undo restores the original positions.` }),
-    el("button", { text: "Undo last run", onclick: undo }),
+function unsureCard() {
+  const { unclassified } = state.plan;
+  if (!unclassified.length) return null;
+  return quietCard(
+    {
+      id: "sec-unsure",
+      iconName: "inbox",
+      title: "Couldn't place",
+      blurb: `${plural(unclassified.length, "bookmark")} I wasn't sure about, so I left alone.`,
+    },
+    el(
+      "ul",
+      { class: "rows" },
+      unclassified.map(({ bookmark, why }) => el("li", { class: "row simple" }, siteCell(bookmark), el("p", { class: "why", text: describeWhy(why) }))),
+    ),
   );
 }
 
-async function apply() {
-  const moves = [
-    ...state.plan.moves.filter((m) => state.moves.has(m.id)),
-    ...state.plan.review.filter((r) => r.to && state.review.has(r.id)),
+function aboutCard() {
+  const d = state.plan.diagnostics;
+  const facts = [
+    "I learn from how you already organize. I compare each bookmark's website and words with what's in your folders.",
+    "Everything is worked out on your computer. Nothing is uploaded anywhere.",
   ];
+  if (d.foldersWithEnoughBookmarks) {
+    facts.push(
+      `${d.foldersJudged} of ${plural(d.foldersWithEnoughBookmarks, "folder")} with 4 or more bookmarks were clear enough for me to check. In a practice run I put ${percent(d.accuracy)} of their bookmarks back in the right folder on my own.`,
+    );
+  }
+  if (d.noTarget) facts.push(`${plural(d.noTarget, "bookmark")} looked out of place, but no other folder fit, so I left ${d.noTarget === 1 ? "it" : "them"} alone.`);
+  if (d.mixed.length) {
+    const names = d.mixed.slice(0, 8).map((m) => m.path.split("/").pop());
+    facts.push(`I couldn't check ${names.join(", ")}${d.mixed.length > 8 ? ` and ${d.mixed.length - 8} more` : ""}, because the bookmarks in ${d.mixed.length === 1 ? "it don't" : "them don't"} look alike.`);
+  }
+  return quietCard(
+    { id: "sec-about", iconName: "info", title: "How I decide", blurb: "A quick look at how these suggestions are made." },
+    el("ul", { class: "facts" }, facts.map((text) => el("li", { text }))),
+  );
+}
+
+function bannerNode() {
+  const run = state.lastRun;
+  if (!run) return null;
+  const moved = run.moved.length;
+  const removed = run.removed.length;
+  const parts = [moved ? plural(moved, "bookmark moved", "bookmarks moved") : null, removed ? plural(removed, "duplicate removed", "duplicates removed") : null].filter(Boolean);
+  return el(
+    "div",
+    { class: "banner", role: "status" },
+    el("span", { class: "banner-icon" }, icon("check", 18, 3)),
+    el(
+      "div",
+      { class: "banner-text" },
+      state.justApplied
+        ? [el("strong", { text: "All done. " }), `${parts.join(", ")}.`]
+        : [el("strong", { text: "Last tidy-up: " }), `${parts.join(", ")}, on ${new Date(run.time).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}.`],
+    ),
+    el("button", { class: "btn btn-quiet btn-small", onclick: undo }, icon("undo", 15), "Undo"),
+  );
+}
+
+function heroNode() {
+  const s = state.plan.summary;
+  const total = changeCount();
+  const stats = el(
+    "div",
+    { class: "stats" },
+    [
+      [s.bookmarks, "bookmarks"],
+      [s.folders, "folders"],
+      [s.quickAccess, "shortcuts kept safe"],
+    ].map(([value, label]) => el("div", { class: "stat" }, el("strong", { text: String(value) }), el("span", { text: label }))),
+  );
+  if (!total) {
+    return el(
+      "section",
+      { class: "hero hero-tidy" },
+      el("span", { class: "big-check" }, icon("check", 32, 3)),
+      el("div", {}, el("p", { class: "eyebrow", text: "All good" }), el("h2", { text: "Your bookmarks look tidy" }), el("p", { class: "lead", text: "I didn't find anything to move or remove. Come back after you've saved a few more." }), el("div", { class: "hero-actions" }, stats)),
+    );
+  }
+  return el(
+    "section",
+    { class: "hero" },
+    el(
+      "div",
+      {},
+      el("p", { class: "eyebrow", text: "Your bookmarks" }),
+      el("h2", {}, "I found ", el("em", { text: String(total) }), ` ${total === 1 ? "thing" : "things"} to tidy up`),
+      el("p", { class: "lead", text: "Here's what I'd change. Nothing happens until you say so, and you can undo it afterwards." }),
+      el(
+        "div",
+        { class: "hero-actions" },
+        el("button", { class: "btn btn-primary btn-lg", id: "tidyAllBtn", onclick: tidyEverything }, icon("sparkle", 18), "Tidy up everything"),
+        el("button", { class: "textbtn", text: "Let me review first", onclick: () => document.querySelector("#app .card")?.scrollIntoView({ behavior: "smooth", block: "start" }) }),
+      ),
+    ),
+    stats,
+  );
+}
+
+// ---------------------------------------------------------------- rendering
+
+const CARD_BUILDERS = { moves: movesCard, review: reviewCard, dups: dupsCard };
+const CARD_IDS = { moves: "sec-moves", review: "sec-review", dups: "sec-dups" };
+
+// Re-render one card after a bulk change so the page doesn't jump or collapse other cards.
+function refreshCard(kind) {
+  const old = $(CARD_IDS[kind]);
+  const next = CARD_BUILDERS[kind]();
+  if (old && next) old.replaceWith(next);
+}
+
+function render() {
+  $("demoBadge").hidden = !isDemo;
+  $("app").replaceChildren(
+    ...[bannerNode(), heroNode(), movesCard(), reviewCard(), dupsCard(), shortcutsCard(), unsureCard(), aboutCard()].filter(Boolean),
+  );
+  updateBar();
+}
+
+function updateBar() {
+  const bar = $("actionbar");
+  bar.hidden = changeCount() === 0;
+  const moves = selectedMoves().length;
+  const removals = state.removals.size;
+  const total = moves + removals;
+  const detail = [moves ? `Moving ${plural(moves, "bookmark")}` : null, removals ? `removing ${plural(removals, "duplicate")}` : null].filter(Boolean).join(", ");
+  $("selection").replaceChildren(
+    total ? `${plural(total, "change")} selected` : "Nothing selected yet",
+    el("small", { text: total ? detail : "Tick what you'd like me to do" }),
+  );
+  $("applyBtn").disabled = state.busy || total === 0;
+}
+
+// ---------------------------------------------------------------- actions
+
+function selectEverything(on) {
+  state.moves = new Set(on ? state.plan.moves.map((m) => m.id) : []);
+  state.review = new Set(on ? state.plan.review.map((r) => r.id) : []);
+  state.removals = new Set(on ? duplicateRows().map((d) => d.id) : []);
+  for (const kind of Object.keys(CARD_BUILDERS)) refreshCard(kind);
+  updateBar();
+}
+
+function tidyEverything() {
+  selectEverything(true);
+  return apply();
+}
+
+function confirmTidy(moves, removeIds) {
+  const newFolders = new Set(moves.filter((m) => m.to.newFolder).map((m) => m.to.path.join("›")));
+  const lines = [];
+  const filed = moves.filter((m) => !state.plan.review.includes(m));
+  const misplaced = moves.length - filed.length;
+  if (filed.length) lines.push(`Move ${plural(filed.length, "bookmark")} into folders`);
+  if (misplaced) lines.push(`Move ${plural(misplaced, "bookmark")} to a better folder`);
+  if (newFolders.size) lines.push(`Create ${plural(newFolders.size, "new folder")}`);
+  if (removeIds.length) lines.push(`Remove ${plural(removeIds.length, "duplicate copy", "duplicate copies")}`);
+  $("confirmList").replaceChildren(...lines.map((text) => el("li", {}, icon("check", 18, 2.5), text)));
+
+  const dialog = $("confirmDialog");
+  return new Promise((resolve) => {
+    dialog.returnValue = "";
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
+    dialog.showModal();
+  });
+}
+
+async function apply() {
+  if (state.busy) return;
+  const moves = selectedMoves();
   const removeIds = [...state.removals];
-  if (!confirm(`Move ${plural(moves.length, "bookmark")} and remove ${plural(removeIds.length, "duplicate")}?\n\nYou can undo this afterwards.`)) return;
+  if (!moves.length && !removeIds.length) return;
+  if (!(await confirmTidy(moves, removeIds))) return;
+
   state.busy = true;
-  updateFooter();
+  updateBar();
   const result = await applyPlan(chrome.bookmarks, { moves, removeIds });
   if (result.moved + result.removed > 0) await chrome.storage.local.set({ lastRun: result.undo });
   state.busy = false;
-  const summary = `Moved ${result.moved}, removed ${result.removed}, skipped ${result.skipped}.`;
+  state.justApplied = result.moved + result.removed > 0;
   await load();
-  if (result.error) setStatus(`${summary} Stopped early: ${result.error}. Use "Undo last run" to restore.`, "error");
-  else setStatus(summary, "ok");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (result.error) toast(`I stopped early (${result.error}). You can undo what was done.`, "error");
+  else if (!state.justApplied) toast("Nothing needed to change.");
 }
 
 async function undo() {
   const { lastRun } = await chrome.storage.local.get("lastRun");
-  if (!lastRun || !confirm("Undo the last run and restore the original positions?")) return;
+  if (!lastRun) return;
   const { errors } = await undoRun(chrome.bookmarks, lastRun);
   await chrome.storage.local.remove("lastRun");
+  state.justApplied = false;
   await load();
-  if (errors.length) setStatus(`Undone with ${errors.length} problem(s): ${errors[0]}`, "error");
-  else setStatus("Restored the original positions.", "ok");
+  if (errors.length) toast(`Mostly restored, but ${plural(errors.length, "thing")} couldn't be put back.`, "error");
+  else toast("Everything is back where it was.");
 }
 
 $("applyBtn").addEventListener("click", apply);
 $("selectAllBtn").addEventListener("click", () => selectEverything(true));
 $("clearAllBtn").addEventListener("click", () => selectEverything(false));
+
+// Close the confirm panel with Esc or by clicking outside it, not only with its buttons.
+const confirmDialog = $("confirmDialog");
+confirmDialog.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    confirmDialog.close("cancel");
+  }
+});
+confirmDialog.addEventListener("click", (event) => {
+  const box = confirmDialog.getBoundingClientRect();
+  const outside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+  if (outside) confirmDialog.close("cancel");
+});
 await load();

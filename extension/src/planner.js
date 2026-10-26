@@ -88,6 +88,7 @@ function fromCounts(counter, label, folderById, { minCount = 1, minShare = 0.6, 
     folder,
     confidence: cap ?? (best >= 2 ? "high" : "medium"),
     reason: `${best} of ${total} bookmarks from ${label} are already in "${folder.path.join("/")}"`,
+    why: { type: "sameSite", host: label, count: best, total, folder: folder.title },
   };
 }
 
@@ -157,9 +158,17 @@ export function findMisplaced(folders, bookmarks, dismissed = new Set()) {
         url: bookmark.url,
         fromParentId: bookmark.parentId,
         fromPath: bookmark.path,
-        to: target ? { folderId: target.folder.id, label: target.folder.path.join("/"), newFolder: null } : null,
+        to: target ? { folderId: target.folder.id, label: target.folder.path.join("/"), path: target.folder.path, newFolder: null } : null,
         confidence: target ? (target.sameSite ? "high" : "medium") : "low",
         reason: target ? `${why}. "${target.folder.path.join("/")}" holds mostly ${bookmark.category}.` : `${why}. No better folder found.`,
+        why: {
+          type: "otherKind",
+          host: bookmark.host,
+          category: bookmark.category,
+          ownKind: top.key,
+          ownFolder: folder.title,
+          folder: target?.folder.title ?? null,
+        },
       });
     }
   }
@@ -192,7 +201,7 @@ export function buildPlan(
     if (key && (!current || folder.path.length < current.path.length)) existing.set(key, folder);
   }
 
-  const toExisting = (folder) => ({ folderId: folder.id, label: folder.path.join("/"), newFolder: null });
+  const toExisting = (folder) => ({ folderId: folder.id, label: folder.path.join("/"), path: folder.path, newFolder: null });
   const learned = learnFromFolders(folders, bookmarks);
   // Largest folder first, so a loose shopping site goes to the main shopping folder.
   const categoryFolders = folderProfiles(folders, bookmarks).targets.sort((a, b) => b.list.length - a.list.length);
@@ -217,7 +226,7 @@ export function buildPlan(
       fromCounts(byHost.get(host), host, folderById) ??
       fromCounts(byBase.get(baseDomain(host)), baseDomain(host), folderById, { minCount: 3, minShare: 0.8, cap: "medium" });
     if (found) {
-      decisions.push({ bookmark, to: toExisting(found.folder), confidence: found.confidence, reason: found.reason });
+      decisions.push({ bookmark, to: toExisting(found.folder), confidence: found.confidence, reason: found.reason, why: found.why });
       continue;
     }
     const matches = [...existing.values()].filter((f) => folderMatches(f.title, bookmark.title, host));
@@ -228,17 +237,20 @@ export function buildPlan(
         to: toExisting(matches[0]),
         confidence: "medium",
         reason: `Title or site mentions your folder "${matches[0].title}"`,
+        why: { type: "folderName", folder: matches[0].title },
       });
       continue;
     }
     const category = categorize(bookmark.url, bookmark.title);
     const kindFolder = category && categoryFolders.find((t) => t.category === category);
     if (category && existing.has(category.toLowerCase())) {
+      const target = existing.get(category.toLowerCase());
       decisions.push({
         bookmark,
-        to: toExisting(existing.get(category.toLowerCase())),
+        to: toExisting(target),
         confidence: "medium",
         reason: `Category "${category}" matches your existing folder`,
+        why: { type: "category", category, folder: target.title },
       });
       continue;
     }
@@ -248,6 +260,7 @@ export function buildPlan(
         to: toExisting(kindFolder.folder),
         confidence: "medium",
         reason: `"${kindFolder.folder.path.join("/")}" mostly holds ${category} sites`,
+        why: { type: "kindFolder", category, folder: kindFolder.folder.title },
       });
       continue;
     }
@@ -255,11 +268,11 @@ export function buildPlan(
     // before suggesting a brand-new folder, so what you already have is reused first.
     const similar = learned.suggestFolder(bookmark);
     if (similar) {
-      decisions.push({ bookmark, to: toExisting(similar.folder), confidence: similar.confidence, reason: similar.reason });
+      decisions.push({ bookmark, to: toExisting(similar.folder), confidence: similar.confidence, reason: similar.reason, why: similar.why });
     } else if (category) {
       candidates.push({ bookmark, category });
     } else {
-      unclassified.push({ bookmark, reason: "No matching folder or known category" });
+      unclassified.push({ bookmark, reason: "No matching folder or known category", why: { type: "unknown" } });
     }
   }
 
@@ -275,20 +288,22 @@ export function buildPlan(
         to: {
           folderId: null,
           label: `${rootTitle.get(bookmark.parentId)}/${category}`,
+          path: [rootTitle.get(bookmark.parentId), category],
           newFolder: { parentId: bookmark.parentId, title: category },
         },
         confidence: "low",
         reason: `Looks like "${category}" (new folder suggested)`,
+        why: { type: "newFolder", category },
       });
     } else {
-      unclassified.push({ bookmark, reason: `Only one "${category}" bookmark, not enough for a new folder` });
+      unclassified.push({ bookmark, reason: `Only one "${category}" bookmark, not enough for a new folder`, why: { type: "single", category } });
     }
   }
 
   decisions.sort(
     (a, b) => CONFIDENCE_ORDER[a.confidence] - CONFIDENCE_ORDER[b.confidence] || a.to.label.localeCompare(b.to.label),
   );
-  const moves = decisions.map(({ bookmark, to, confidence, reason }) => ({
+  const moves = decisions.map(({ bookmark, to, confidence, reason, why }) => ({
     id: bookmark.id,
     title: bookmark.title,
     url: bookmark.url,
@@ -297,6 +312,7 @@ export function buildPlan(
     to,
     confidence,
     reason,
+    why,
   }));
   const duplicates = findDuplicates(bookmarks);
   // Two sources of "possibly misfiled": the site's kind (explicit, known sites) and what the

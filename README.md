@@ -2,10 +2,11 @@
 
 A Chrome extension that organizes your bookmarks the way you already do. It learns from the folders you built, shows every proposed move, and can undo the whole run.
 
+- **You always see where a bookmark is going.** Every suggestion reads as a route: the site, the folder it is in now, an arrow, and the folder I'd put it in, plus one plain sentence on why. No scores or jargon.
 - **Learns from you.** A loose bookmark follows the folder that already holds most bookmarks from the same site, or the folder that mostly holds that kind of site (a folder called "Buy" full of shopping sites counts as your shopping folder). Built-in categories are only a fallback.
 - **Your shortcuts stay put.** Things on the bookmarks bar that you click to *use* (Gmail, ChatGPT, bookmarklets, icon-only bookmarks, short-named home pages) are never moved. You can mark any item "Keep on bar" or "Organize it anyway", and it is remembered.
 - **Catches misfiled bookmarks.** Learns what each of your folders is about from what is already in it, then flags a bookmark that resembles a different folder much more than its own, and says which bookmarks it resembles. Works for work and internal sites too. Suggestions are never pre-selected, and "Keep here" is remembered.
-- **You approve everything, in one click if you trust it.** Proposed moves, possibly-misfiled bookmarks and duplicates each have **Select all**, **High & medium only** and **Clear**, and the bottom bar has **Select all suggestions** for everything at once. Nothing changes until you press Apply.
+- **You approve everything, in one click if you trust it.** The top button, **Tidy up everything**, selects every suggestion and asks for a final yes. Each section also has **Select all**, **Only the likely ones** and **Clear**, and a floating bar keeps the count and the **Tidy up** button in reach. Nothing changes until you confirm.
 - **One-click undo.** Restores the original positions of the last run, including removed duplicates.
 - **Private by design.** No account, no API key, no network requests. The only permissions are `bookmarks` and `storage`.
 - **Safe by default.** Bookmarks you already filed are only moved if you tick a suggestion. Duplicates are only removed if you tick them.
@@ -64,6 +65,7 @@ node --test extension/tests/*.test.js    # Node 22+
 - `extension/src/learn.js`: learns what each folder is about (TF-IDF similarity, leave-one-out check)
 - `extension/src/quickaccess.js`: which bookmarks-bar items count as shortcuts
 - `extension/src/url.js`: URL helpers
+- `extension/src/present.js`: turns reasons into plain sentences and prepares what the interface shows (tested, so the wording stays human)
 - `extension/src/apply.js`: apply and undo through an injected bookmarks API
 - `extension/src/memory-bookmarks.js`: in-memory `chrome.bookmarks` used by tests and demo mode
 - `extension/organizer.js`: the interface (all bookmark text is rendered as text, never HTML)

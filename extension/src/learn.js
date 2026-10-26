@@ -177,9 +177,15 @@ export function learnFromFolders(folders, bookmarks) {
             url: b.url,
             fromParentId: b.parentId,
             fromPath: b.path,
-            to: { folderId: best.folder.id, label: best.folder.path.join("/"), newFolder: null },
+            to: { folderId: best.folder.id, label: best.folder.path.join("/"), path: best.folder.path, newFolder: null },
             confidence: best.score >= 0.5 && gap >= 0.4 ? "high" : best.score >= 0.35 && gap >= 0.25 ? "medium" : "low",
             reason: reason(best, i),
+            why: {
+              type: "similarElsewhere",
+              titles: best.neighbors.map((n) => n.title || hostOf(n.url)),
+              ownFolder: folderById.get(b.parentId).title,
+              folder: best.folder.title,
+            },
           });
         }
       }
@@ -197,6 +203,7 @@ export function learnFromFolders(folders, bookmarks) {
         folder: top.folder,
         confidence: top.score >= 0.45 ? "medium" : "low",
         reason: `Similar to ${seen} in "${top.folder.path.join("/")}"`,
+        why: { type: "similar", titles: top.neighbors.map((n) => n.title || hostOf(n.url)), folder: top.folder.title },
       };
     },
 

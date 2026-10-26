@@ -76,8 +76,9 @@ export function createMemoryBookmarks(roots) {
 export function createMemoryStorage() {
   const data = {};
   return {
-    async get(key) {
-      return key in data ? { [key]: structuredClone(data[key]) } : {};
+    async get(keys) {
+      const list = Array.isArray(keys) ? keys : [keys];
+      return Object.fromEntries(list.filter((key) => key in data).map((key) => [key, structuredClone(data[key])]));
     },
     async set(values) {
       Object.assign(data, structuredClone(values));

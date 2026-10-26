@@ -86,6 +86,11 @@ details.group[open] > summary::before { content: "\25BE"; }
 
 .tools { display: flex; gap: 8px; margin-bottom: 10px; }
 .empty { color: var(--muted); }
+.hint { margin: -4px 0 10px; color: var(--muted); font-size: 12px; }
+
+button.link {
+  border: 0; background: none; padding: 0 0 0 10px; color: var(--accent); font-size: 12px; text-decoration: underline;
+}
 
 button {
   font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--card); color: var(--text);

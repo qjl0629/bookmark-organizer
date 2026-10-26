@@ -1,12 +1,12 @@
 import { applyPlan, undoRun } from "./src/apply.js";
-import { buildPlan, hostOf } from "./src/planner.js";
+import { buildPlan, dismissKey, hostOf, normalizeUrl } from "./src/planner.js";
 
 // Outside Chrome (previews, screenshots) fall back to fictional demo data.
 const isDemo = !globalThis.chrome?.bookmarks;
 if (isDemo) (await import("./src/demo.js")).installDemo();
 
 const $ = (id) => document.getElementById(id);
-const state = { plan: null, moves: new Set(), removals: new Set(), busy: false };
+const state = { plan: null, moves: new Set(), review: new Set(), removals: new Set(), seenMoves: new Set(), busy: false };
 
 // All bookmark text is inserted as text nodes, never as HTML.
 function el(tag, attrs = {}, ...children) {
@@ -31,9 +31,43 @@ function setStatus(text, kind = "") {
   node.className = kind;
 }
 
+// Choices the user made, remembered across runs: shortcuts to keep on the bar, items to
+// organize even though they look like shortcuts, and "keep here" answers for review items.
+const SETTING_KEYS = ["pinned", "organizeAnyway", "dismissed"];
+
+async function readSettings() {
+  const stored = await chrome.storage.local.get(SETTING_KEYS);
+  return Object.fromEntries(SETTING_KEYS.map((key) => [key, new Set(stored[key] ?? [])]));
+}
+
+async function changeSettings(mutate) {
+  const settings = await readSettings();
+  mutate(settings);
+  await chrome.storage.local.set(Object.fromEntries(SETTING_KEYS.map((key) => [key, [...settings[key]]])));
+  await load();
+}
+
+const keepOnBar = (url) =>
+  changeSettings((s) => {
+    s.pinned.add(normalizeUrl(url));
+    s.organizeAnyway.delete(normalizeUrl(url));
+  });
+const organizeAnyway = (url) =>
+  changeSettings((s) => {
+    s.organizeAnyway.add(normalizeUrl(url));
+    s.pinned.delete(normalizeUrl(url));
+  });
+const keepHere = (item) => changeSettings((s) => s.dismissed.add(dismissKey({ url: item.url, parentId: item.fromParentId })));
+
 async function load() {
-  state.plan = buildPlan(await chrome.bookmarks.getTree());
-  state.moves = new Set(state.plan.moves.map((m) => m.id));
+  const settings = await readSettings();
+  state.plan = buildPlan(await chrome.bookmarks.getTree(), settings);
+  // Keep the user's ticks across reloads; moves that appear for the first time start selected.
+  const previous = state.moves;
+  const seen = state.seenMoves;
+  state.moves = new Set(state.plan.moves.filter((m) => !seen.has(m.id) || previous.has(m.id)).map((m) => m.id));
+  state.seenMoves = new Set(state.plan.moves.map((m) => m.id));
+  state.review = new Set([...state.review].filter((id) => state.plan.review.some((r) => r.id === id)));
   state.removals = new Set();
   render();
   await renderUndo();
@@ -43,7 +77,9 @@ function render() {
   $("demoBadge").hidden = !isDemo;
   renderStats();
   renderMoves();
+  renderReview();
   renderDuplicates();
+  renderQuickAccess();
   renderUnclassified();
   updateFooter();
 }
@@ -54,7 +90,9 @@ function renderStats() {
     ["Bookmarks", s.bookmarks],
     ["Folders", s.folders],
     ["Loose", s.loose],
+    ["Quick access (kept)", s.quickAccess],
     ["Proposed moves", s.moves],
+    ["To review", s.review],
     ["Duplicate groups", s.duplicateGroups],
   ];
   $("stats").replaceChildren(
@@ -71,6 +109,20 @@ function moveRow(move, onChange) {
     onChange();
     updateFooter();
   });
+  const reason = el("span", { class: "reason" }, move.reason);
+  if (move.fromParentId === state.plan.barRootId) {
+    reason.append(
+      el("button", {
+        class: "link",
+        text: "Keep on bar",
+        title: "This is a shortcut I click to use. Don't move it.",
+        onclick: (event) => {
+          event.preventDefault();
+          keepOnBar(move.url);
+        },
+      }),
+    );
+  }
   const row = el(
     "label",
     { class: "row" },
@@ -78,7 +130,7 @@ function moveRow(move, onChange) {
     el("span", { class: "title", text: move.title || move.url, title: move.url }),
     el("span", { class: "host", text: hostOf(move.url) }),
     el("span", { class: `badge ${move.confidence}`, text: move.confidence }),
-    el("span", { class: "reason", text: move.reason }),
+    reason,
   );
   return { row, box };
 }
@@ -190,8 +242,67 @@ function renderUnclassified() {
   );
 }
 
+function renderReview() {
+  const { review } = state.plan;
+  const root = $("review");
+  if (!review.length) {
+    root.replaceChildren(el("p", { class: "empty", text: "Nothing looks out of place." }));
+    return;
+  }
+  root.replaceChildren(
+    el(
+      "details",
+      { class: "group", open: true },
+      el("summary", {}, el("span", { class: "group-name", text: "Bookmarks that may be in the wrong folder" }), el("span", { class: "count", text: plural(review.length, "bookmark") })),
+      review.map((item) => {
+        const keep = el("button", { class: "link", text: "Keep here", onclick: (event) => { event.preventDefault(); keepHere(item); } });
+        const reason = el("span", { class: "reason" }, item.reason, keep);
+        const label = el("span", { class: "host", text: item.to ? `${item.fromPath.join("/")}  →  ${item.to.label}` : item.fromPath.join("/") });
+        if (!item.to) {
+          return el("div", { class: "row" }, el("span", {}), el("span", { class: "title", text: item.title || item.url, title: item.url }), label, el("span", { class: "badge low", text: "no target" }), reason);
+        }
+        const box = el("input", { type: "checkbox" });
+        box.checked = state.review.has(item.id);
+        box.addEventListener("change", () => {
+          if (box.checked) state.review.add(item.id);
+          else state.review.delete(item.id);
+          updateFooter();
+        });
+        return el("label", { class: "row" }, box, el("span", { class: "title", text: item.title || item.url, title: item.url }), label, el("span", { class: `badge ${item.confidence}`, text: item.confidence }), reason);
+      }),
+    ),
+  );
+}
+
+function renderQuickAccess() {
+  const { quickAccess } = state.plan;
+  const root = $("quick");
+  if (!quickAccess.length) {
+    root.replaceChildren(el("p", { class: "empty", text: "No shortcuts detected on the bookmarks bar." }));
+    return;
+  }
+  root.replaceChildren(
+    el(
+      "details",
+      { class: "group" },
+      el("summary", {}, el("span", { class: "group-name", text: "Shortcuts kept where they are" }), el("span", { class: "count", text: plural(quickAccess.length, "bookmark") })),
+      quickAccess.map(({ bookmark, reason }) =>
+        el(
+          "div",
+          { class: "row keep" },
+          el("span", {}),
+          el("span", { class: "title", text: bookmark.title || bookmark.url, title: bookmark.url }),
+          el("span", { class: "host", text: hostOf(bookmark.url) }),
+          el("span", { class: "badge high", text: "kept" }),
+          el("span", { class: "reason" }, reason, el("button", { class: "link", text: "Organize it anyway", onclick: () => organizeAnyway(bookmark.url) })),
+        ),
+      ),
+    ),
+  );
+}
+
 function updateFooter() {
-  const moves = state.moves.size;
+  const moves = state.moves.size + state.review.size;
   const removals = state.removals.size;
   $("selection").textContent = `${plural(moves, "move")} and ${plural(removals, "duplicate removal")} selected`;
   $("applyBtn").disabled = state.busy || moves + removals === 0;
@@ -209,7 +320,10 @@ async function renderUndo() {
 }
 
 async function apply() {
-  const moves = state.plan.moves.filter((m) => state.moves.has(m.id));
+  const moves = [
+    ...state.plan.moves.filter((m) => state.moves.has(m.id)),
+    ...state.plan.review.filter((r) => r.to && state.review.has(r.id)),
+  ];
   const removeIds = [...state.removals];
   if (!confirm(`Move ${plural(moves.length, "bookmark")} and remove ${plural(removeIds.length, "duplicate")}?\n\nYou can undo this afterwards.`)) return;
   state.busy = true;

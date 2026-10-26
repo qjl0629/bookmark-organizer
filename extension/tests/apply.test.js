@@ -29,7 +29,7 @@ async function snapshot(api) {
 const sample = () =>
   makeApi([
     folder("Dev", [bm("a", "https://github.com/a"), bm("b", "https://github.com/b")]),
-    bm("loose repo", "https://github.com/c"),
+    bm("loose repo", "https://github.com/org/c"),
     bm("Item", "https://www.amazon.ca/dp/1"),
     bm("Item 2", "https://www.amazon.com/dp/2"),
     bm("Mystery", "https://unknown.example.org"),

@@ -23,7 +23,7 @@ function hostMatches(host, token) {
   return host === token || host.endsWith("." + token);
 }
 
-export function categorize(url, title = "") {
+export function categorize(url, title = "", { useTitle = true } = {}) {
   let parsed;
   try {
     parsed = new URL(url);
@@ -38,9 +38,13 @@ export function categorize(url, title = "") {
     for (const token of tokens) {
       if (token.includes("/") ? hostPath.includes(token) : hostMatches(host, token)) return category;
     }
+    if (!useTitle) continue;
     for (const word of words) {
       if (new RegExp(`\\b${escapeRegExp(word)}\\b`).test(titleLower)) return category;
     }
   }
   return null;
 }
+
+// Site-only category. Title words are weaker evidence, so they are not used to judge misfiling.
+export const categorizeHost = (url) => categorize(url, "", { useTitle: false });

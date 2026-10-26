@@ -1,0 +1,237 @@
+import { applyPlan, undoRun } from "./src/apply.js";
+import { buildPlan, hostOf } from "./src/planner.js";
+
+// Outside Chrome (previews, screenshots) fall back to fictional demo data.
+const isDemo = !globalThis.chrome?.bookmarks;
+if (isDemo) (await import("./src/demo.js")).installDemo();
+
+const $ = (id) => document.getElementById(id);
+const state = { plan: null, moves: new Set(), removals: new Set(), busy: false };
+
+// All bookmark text is inserted as text nodes, never as HTML.
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (value === true) node.setAttribute(key, "");
+    else if (value !== false && value != null) node.setAttribute(key, value);
+  }
+  node.append(...children.flat());
+  return node;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const copies = (n, prefix = "") => `${n} ${prefix}cop${n === 1 ? "y" : "ies"}`;
+
+function setStatus(text, kind = "") {
+  const node = $("status");
+  node.textContent = text;
+  node.className = kind;
+}
+
+async function load() {
+  state.plan = buildPlan(await chrome.bookmarks.getTree());
+  state.moves = new Set(state.plan.moves.map((m) => m.id));
+  state.removals = new Set();
+  render();
+  await renderUndo();
+}
+
+function render() {
+  $("demoBadge").hidden = !isDemo;
+  renderStats();
+  renderMoves();
+  renderDuplicates();
+  renderUnclassified();
+  updateFooter();
+}
+
+function renderStats() {
+  const s = state.plan.summary;
+  const items = [
+    ["Bookmarks", s.bookmarks],
+    ["Folders", s.folders],
+    ["Loose", s.loose],
+    ["Proposed moves", s.moves],
+    ["Duplicate groups", s.duplicateGroups],
+  ];
+  $("stats").replaceChildren(
+    ...items.map(([label, value]) => el("div", { class: "stat" }, el("strong", { text: String(value) }), el("span", { text: label }))),
+  );
+}
+
+function moveRow(move, onChange) {
+  const box = el("input", { type: "checkbox" });
+  box.checked = state.moves.has(move.id);
+  box.addEventListener("change", () => {
+    if (box.checked) state.moves.add(move.id);
+    else state.moves.delete(move.id);
+    onChange();
+    updateFooter();
+  });
+  const row = el(
+    "label",
+    { class: "row" },
+    box,
+    el("span", { class: "title", text: move.title || move.url, title: move.url }),
+    el("span", { class: "host", text: hostOf(move.url) }),
+    el("span", { class: `badge ${move.confidence}`, text: move.confidence }),
+    el("span", { class: "reason", text: move.reason }),
+  );
+  return { row, box };
+}
+
+function moveGroup(group, open) {
+  const ids = group.moves.map((m) => m.id);
+  const all = el("input", { type: "checkbox", "aria-label": `Select all moves to ${group.label}` });
+  all.addEventListener("click", (event) => event.stopPropagation()); // don't toggle the <details>
+  const sync = () => {
+    const selected = ids.filter((id) => state.moves.has(id)).length;
+    all.checked = selected === ids.length;
+    all.indeterminate = selected > 0 && selected < ids.length;
+  };
+  const rows = group.moves.map((move) => moveRow(move, sync));
+  all.addEventListener("change", () => {
+    ids.forEach((id) => (all.checked ? state.moves.add(id) : state.moves.delete(id)));
+    rows.forEach(({ box }) => (box.checked = all.checked));
+    updateFooter();
+  });
+  sync();
+  return el(
+    "details",
+    { class: "group", open },
+    el(
+      "summary",
+      {},
+      all,
+      el("span", { class: "group-name", text: group.label }),
+      group.isNew ? el("span", { class: "badge new", text: "new folder" }) : null,
+      el("span", { class: "count", text: plural(ids.length, "bookmark") }),
+    ),
+    rows.map(({ row }) => row),
+  );
+}
+
+function renderMoves() {
+  const { moves } = state.plan;
+  if (!moves.length) {
+    $("moves").replaceChildren(el("p", { class: "empty", text: "Nothing to move. No loose bookmark matched one of your folders or a known category." }));
+    return;
+  }
+  const groups = new Map();
+  for (const move of moves) {
+    if (!groups.has(move.to.label)) groups.set(move.to.label, { label: move.to.label, isNew: !move.to.folderId, moves: [] });
+    groups.get(move.to.label).moves.push(move);
+  }
+  $("moves").replaceChildren(...[...groups.values()].map((group, index) => moveGroup(group, index < 6)));
+}
+
+function renderDuplicates() {
+  const { duplicates } = state.plan;
+  const root = $("dups");
+  if (!duplicates.length) {
+    root.replaceChildren(el("p", { class: "empty", text: "No duplicates found." }));
+    return;
+  }
+  const extras = duplicates.flatMap((group) => group.slice(1).map((b) => b.id));
+  const boxes = [];
+  const items = duplicates.map((group) =>
+    el(
+      "details",
+      { class: "group", open: true },
+      el("summary", {}, el("span", { class: "group-name", text: group[0].title || group[0].url }), el("span", { class: "count", text: copies(group.length) })),
+      group.map((bookmark, index) => {
+        if (index === 0) {
+          return el("div", { class: "row keep" }, el("span", {}), el("span", { class: "title", text: bookmark.path.join("/") }), el("span", { class: "host", text: "earliest, kept" }), el("span", { class: "badge high", text: "keep" }));
+        }
+        const box = el("input", { type: "checkbox" });
+        box.addEventListener("change", () => {
+          if (box.checked) state.removals.add(bookmark.id);
+          else state.removals.delete(bookmark.id);
+          updateFooter();
+        });
+        boxes.push({ box, id: bookmark.id });
+        return el("label", { class: "row" }, box, el("span", { class: "title", text: bookmark.path.join("/") }), el("span", { class: "host", text: "extra copy" }), el("span", { class: "badge low", text: "remove" }));
+      }),
+    ),
+  );
+  const setAll = (checked) => {
+    boxes.forEach(({ box, id }) => {
+      box.checked = checked;
+      if (checked) state.removals.add(id);
+      else state.removals.delete(id);
+    });
+    updateFooter();
+  };
+  root.replaceChildren(
+    el("div", { class: "tools" }, el("button", { text: `Select all ${copies(extras.length, "extra ")}`, onclick: () => setAll(true) }), el("button", { text: "Clear", onclick: () => setAll(false) })),
+    ...items,
+  );
+}
+
+function renderUnclassified() {
+  const { unclassified } = state.plan;
+  const root = $("unclassified");
+  if (!unclassified.length) {
+    root.replaceChildren(el("p", { class: "empty", text: "Every loose bookmark has a proposal." }));
+    return;
+  }
+  root.replaceChildren(
+    el(
+      "details",
+      { class: "group" },
+      el("summary", {}, el("span", { class: "group-name", text: "Loose bookmarks with no proposal" }), el("span", { class: "count", text: plural(unclassified.length, "bookmark") })),
+      unclassified.map(({ bookmark, reason }) =>
+        el("div", { class: "row keep" }, el("span", {}), el("span", { class: "title", text: bookmark.title || bookmark.url, title: bookmark.url }), el("span", { class: "host", text: hostOf(bookmark.url) }), el("span", { class: "badge low", text: "left alone" }), el("span", { class: "reason", text: reason })),
+      ),
+    ),
+  );
+}
+
+function updateFooter() {
+  const moves = state.moves.size;
+  const removals = state.removals.size;
+  $("selection").textContent = `${plural(moves, "move")} and ${plural(removals, "duplicate removal")} selected`;
+  $("applyBtn").disabled = state.busy || moves + removals === 0;
+}
+
+async function renderUndo() {
+  const { lastRun } = await chrome.storage.local.get("lastRun");
+  const banner = $("undoBanner");
+  banner.hidden = !lastRun;
+  if (!lastRun) return;
+  banner.replaceChildren(
+    el("span", { text: `Last run ${new Date(lastRun.time).toLocaleString()}: ${lastRun.moved.length} moved, ${lastRun.removed.length} removed. Undo restores the original positions.` }),
+    el("button", { text: "Undo last run", onclick: undo }),
+  );
+}
+
+async function apply() {
+  const moves = state.plan.moves.filter((m) => state.moves.has(m.id));
+  const removeIds = [...state.removals];
+  if (!confirm(`Move ${plural(moves.length, "bookmark")} and remove ${plural(removeIds.length, "duplicate")}?\n\nYou can undo this afterwards.`)) return;
+  state.busy = true;
+  updateFooter();
+  const result = await applyPlan(chrome.bookmarks, { moves, removeIds });
+  if (result.moved + result.removed > 0) await chrome.storage.local.set({ lastRun: result.undo });
+  state.busy = false;
+  const summary = `Moved ${result.moved}, removed ${result.removed}, skipped ${result.skipped}.`;
+  await load();
+  if (result.error) setStatus(`${summary} Stopped early: ${result.error}. Use "Undo last run" to restore.`, "error");
+  else setStatus(summary, "ok");
+}
+
+async function undo() {
+  const { lastRun } = await chrome.storage.local.get("lastRun");
+  if (!lastRun || !confirm("Undo the last run and restore the original positions?")) return;
+  const { errors } = await undoRun(chrome.bookmarks, lastRun);
+  await chrome.storage.local.remove("lastRun");
+  await load();
+  if (errors.length) setStatus(`Undone with ${errors.length} problem(s): ${errors[0]}`, "error");
+  else setStatus("Restored the original positions.", "ok");
+}
+
+$("applyBtn").addEventListener("click", apply);
+await load();

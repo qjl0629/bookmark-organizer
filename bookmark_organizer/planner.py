@@ -24,9 +24,17 @@ def host_of(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+TWO_PART_SUFFIXES = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.jp", "co.nz",
+    "com.cn", "net.cn", "org.cn", "gov.cn", "com.hk", "com.tw", "co.kr", "com.br", "co.in", "co.za",
+}
+
+
 def base_domain(host: str) -> str:
+    """Registrable domain: news.bbc.co.uk -> bbc.co.uk, mail.google.com -> google.com."""
     parts = host.split(".")
-    return ".".join(parts[-2:]) if len(parts) > 2 else host
+    keep = 3 if len(parts) >= 3 and ".".join(parts[-2:]) in TWO_PART_SUFFIXES else 2
+    return ".".join(parts[-keep:]) if len(parts) > keep else host
 
 
 def normalize_url(url: str) -> str:
@@ -88,14 +96,14 @@ def _learn(filed: List[Tuple[Node, Path]]):
     return by_host, by_base
 
 
-def _from_counts(counter: Optional[Counter], label: str, min_count: int):
+def _from_counts(counter: Optional[Counter], label: str, min_count: int = 1, min_share: float = 0.6, cap: Optional[str] = None):
     if not counter:
         return None
     path, count = counter.most_common(1)[0]
     total = sum(counter.values())
-    if count < min_count or count / total < 0.6:
+    if count < min_count or count / total < min_share:
         return None
-    confidence = "high" if count >= 2 else "medium"
+    confidence = cap or ("high" if count >= 2 else "medium")
     return path, confidence, f"{count} of {total} bookmarks from {label} are already in '{'/'.join(path)}'"
 
 
@@ -116,7 +124,11 @@ def build_plan(root: Node, source: FsPath, source_sha256: str, min_new_folder_si
     unclassified = []
     for node, path in loose:
         host = host_of(node.url)
-        found = _from_counts(by_host.get(host), host, 1) or _from_counts(by_base.get(base_domain(host)), base_domain(host), 2)
+        # Exact host first. The whole registrable domain is weaker evidence (google.com hosts
+        # everything), so it needs a strong majority and is never rated "high".
+        found = _from_counts(by_host.get(host), host) or _from_counts(
+            by_base.get(base_domain(host)), base_domain(host), min_count=3, min_share=0.8, cap="medium"
+        )
         if found:
             decisions.append((node, path, *found))
             continue

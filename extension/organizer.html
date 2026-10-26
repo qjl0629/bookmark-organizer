@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bookmark Organizer</title>
+  <link rel="stylesheet" href="organizer.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Bookmark Organizer</h1>
+      <p class="sub">Learns from your own folders. Review every move, then apply. Undo anytime. Everything stays on this device.</p>
+    </div>
+    <span id="demoBadge" class="badge demo" hidden>Demo data</span>
+  </header>
+
+  <main>
+    <section id="stats" class="stats" aria-label="Summary"></section>
+    <div id="status" role="status" aria-live="polite"></div>
+    <section id="undoBanner" class="banner" hidden></section>
+
+    <section>
+      <h2>Proposed moves</h2>
+      <div id="moves"></div>
+    </section>
+    <section>
+      <h2>Duplicates</h2>
+      <div id="dups"></div>
+    </section>
+    <section>
+      <h2>Left alone</h2>
+      <div id="unclassified"></div>
+    </section>
+  </main>
+
+  <footer class="bar">
+    <span id="selection"></span>
+    <button id="applyBtn" class="primary" disabled>Apply selected</button>
+  </footer>
+
+  <script type="module" src="organizer.js"></script>
+</body>
+</html>

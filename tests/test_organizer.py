@@ -8,7 +8,7 @@ from bookmark_organizer.categories import categorize
 from bookmark_organizer.cli import main
 from bookmark_organizer.model import walk_bookmarks
 from bookmark_organizer.parser import parse_chrome_bookmarks
-from bookmark_organizer.planner import build_plan, find_duplicates, normalize_url
+from bookmark_organizer.planner import base_domain, build_plan, find_duplicates, normalize_url
 
 
 def url(i, name, link, added="13300000000000000"):
@@ -106,6 +106,30 @@ class OrganizerTests(unittest.TestCase):
         plan = build_plan(root, Path("x"), "hash")
         plan["moves"] = [{"id": "1", "from": ["Bookmarks bar"], "to": ["Nonexistent root", "X"], "approved": True}]
         self.assertEqual(apply_plan(root, plan)["skipped"], 1)
+
+    def test_base_domain_learning_is_conservative(self):
+        data = chrome_data([
+            folder(10, "Work", [url(11, "a", "https://docs.google.com/a"), url(12, "b", "https://drive.google.com/b")]),
+            url(13, "A map", "https://maps.google.com/place"),
+            folder(20, "Recipes", [url(21, "x", "https://bread.example.org/x"), url(22, "y", "https://soup.example.org/y")]),
+            url(23, "Wedding photos", "https://photos.example.org/album"),
+        ])
+        self.assertEqual(self.plan_for(data)["moves"], [])
+
+    def test_base_domain_learning_works_with_strong_evidence_at_medium(self):
+        data = chrome_data([
+            folder(10, "Team", [url(11, "1", "https://a.corp.example/1"), url(12, "2", "https://b.corp.example/2"), url(13, "3", "https://c.corp.example/3")]),
+            url(14, "New tool", "https://d.corp.example/4"),
+        ])
+        moves = self.plan_for(data)["moves"]
+        self.assertEqual(len(moves), 1)
+        self.assertEqual(moves[0]["confidence"], "medium")
+
+    def test_base_domain_handles_two_level_suffixes(self):
+        self.assertEqual(base_domain("news.bbc.co.uk"), "bbc.co.uk")
+        self.assertEqual(base_domain("bbc.co.uk"), "bbc.co.uk")
+        self.assertEqual(base_domain("shop.example.com.cn"), "example.com.cn")
+        self.assertEqual(base_domain("mail.google.com"), "google.com")
 
     def test_duplicates_detected_and_dropped_keeping_earliest(self):
         data = chrome_data([
